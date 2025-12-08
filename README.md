@@ -1,8 +1,3 @@
-Below is a **clean, professional, no-emoji README** you can copy-paste directly into your GitHub repo.
-Rewritten clearly and concisely based on your original file .
-
----
-
 # Guardrail System for Phi-3-Mini LLM
 
 This project provides a complete guardrail framework for the Phi-3-Mini language model. It introduces safety, reliability, and factual-accuracy checks around model inputs and outputs, ensuring more trustworthy and controlled deployments.
