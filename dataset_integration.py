@@ -1,7 +1,6 @@
 """
 Dataset Integration Module for Guardrail System
 ================================================
-Connects to Snowflake and loads preprocessed datasets:
 - TruthfulQA (hallucination benchmark)
 - SQuAD (contextual grounding)
 - Hate Speech (toxicity detection)
@@ -12,31 +11,16 @@ Connects to Snowflake and loads preprocessed datasets:
 """
 
 import pandas as pd
-import snowflake.connector
 from typing import Dict, List, Optional
 import os
 from dataclasses import dataclass
-
-
-@dataclass
-class SnowflakeConfig:
-    """Snowflake connection configuration"""
-    account: str
-    user: str
-    password: str
-    warehouse: str
-    database: str = "GUARDRAIL"
-    schema: str = "PREPROCESSED"
 
 
 class GuardrailDatasetLoader:
     """
     Loads and manages all datasets for guardrail evaluation
     """
-    
-    def __init__(self, snowflake_config: Optional[SnowflakeConfig] = None):
-        self.config = snowflake_config
-        self.datasets = {}
+
         
         # Dataset mappings
         self.dataset_info = {
@@ -78,22 +62,9 @@ class GuardrailDatasetLoader:
             }
         }
     
-    def connect_snowflake(self) -> snowflake.connector.SnowflakeConnection:
-        """Establish Snowflake connection"""
-        if not self.config:
-            raise ValueError("Snowflake config not provided")
-        
-        conn = snowflake.connector.connect(
-            user=self.config.user,
-            password=self.config.password,
-            account=self.config.account,
-            warehouse=self.config.warehouse,
-            database=self.config.database,
-            schema=self.config.schema
-        )
-        return conn
+   
     
-    def load_from_snowflake(self, dataset_name: str, limit: Optional[int] = None) -> pd.DataFrame:
+    def load_from_s3(self, dataset_name: str, limit: Optional[int] = None) -> pd.DataFrame:
         """Load dataset from Snowflake"""
         if dataset_name not in self.dataset_info:
             raise ValueError(f"Unknown dataset: {dataset_name}")
@@ -120,7 +91,7 @@ class GuardrailDatasetLoader:
             raise ValueError(f"Unknown dataset: {dataset_name}")
         
         df = pd.read_parquet(file_path)
-        print(f"✓ Loaded {len(df)} rows from {file_path}")
+        print(f"Loaded {len(df)} rows from {file_path}")
         return df
     
     def load_all_datasets(self, source: str = 'snowflake', 
@@ -130,7 +101,7 @@ class GuardrailDatasetLoader:
         Load all datasets for guardrail evaluation
         
         Args:
-            source: 'snowflake' or 'local'
+            source: 's3' or 'local'
             local_dir: Directory containing parquet files (if source='local')
             sample_size: Optional limit on rows per dataset
         """
@@ -149,9 +120,9 @@ class GuardrailDatasetLoader:
                     raise ValueError(f"Unknown source: {source}")
             
             except Exception as e:
-                print(f"⚠ Warning: Could not load {name} - {e}")
+                print(f" Warning: Could not load {name} - {e}")
         
-        print(f"\n✓ Loaded {len(self.datasets)} datasets")
+        print(f"\nLoaded {len(self.datasets)} datasets")
         return self.datasets
     
     def get_dataset(self, name: str) -> pd.DataFrame:
@@ -437,15 +408,8 @@ if __name__ == "__main__":
         sample_size=1000
     )
     
-    # Option 2: Load from Snowflake
-    # snowflake_config = SnowflakeConfig(
-    #     account="your_account",
-    #     user="your_user",
-    #     password="your_password",
-    #     warehouse="your_warehouse"
-    # )
-    # loader = GuardrailDatasetLoader(snowflake_config)
-    # datasets = loader.load_all_datasets(source='snowflake', sample_size=1000)
+  
+
     
     # Print dataset info
     print("\nDataset Information:")
