@@ -11,7 +11,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_PATH,
-    torch_dtype=torch.float32,   # CPU-friendly
+    torch_dtype=torch.float32,  
 )
 
 model.to("cpu")
@@ -63,3 +63,4 @@ def generate_phi3(prompt: str, max_new_tokens=200):
         return decoded.replace(prompt, "").strip()
 
     return decoded.strip()
+
