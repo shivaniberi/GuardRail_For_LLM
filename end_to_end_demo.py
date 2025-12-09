@@ -41,9 +41,9 @@ print("\n[STEP 1] Configuring System...")
 print("-"*80)
 
 # Update these paths based on your setup
-PHI3_MODEL_PATH = "/content/drive/MyDrive/phi-3-mini"  # Update this!
-DATA_DIR = "/path/to/your/parquet/files"  # Update this!
-USE_SNOWFLAKE = False  # Set to True if using Snowflake
+PHI3_MODEL_PATH = "/content/drive/MyDrive/phi-3-mini" 
+DATA_DIR = "/path/to/your/parquet/files" 
+USE_SNOWFLAKE = False  
 
 config = GuardrailConfig(
     phi3_model_path=PHI3_MODEL_PATH,
@@ -221,7 +221,7 @@ try:
                 print(f"  {key}: {value}")
     
 except Exception as e:
-    print(f"⚠ Benchmark evaluation skipped: {e}")
+    print(f"Benchmark evaluation skipped: {e}")
     print("  (Ensure datasets are properly loaded)")
 
 
