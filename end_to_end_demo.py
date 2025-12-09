@@ -293,7 +293,7 @@ print("-"*80)
 
 logs_df = guardrail_system.get_logs()
 
-# Calculate average response times (if available)
+# Calculate average response times
 if 'metadata' in logs_df.columns:
     print("\nSYSTEM PERFORMANCE:")
     
