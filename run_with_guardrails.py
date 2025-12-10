@@ -13,6 +13,11 @@ PHI3_MODEL_PATH = r"C:\Users\valla\Downloads\Phi-3-mini-4k-instruct"
 
 SAFETY_PROMPTS_S3 = "s3://guardrail-group-bucket/preprocessed/safety_prompt/2025/11/02/safety_prompt.parquet"
 SQUAD_QA_S3       = "s3://guardrail-group-bucket/preprocessed/squad_qa/2025/11/02/squad_qa.parquet"
+HATE_SPEECH_S3    = "s3://guardrail-group-bucket/preprocessed/hate_speech/2025/11/02/hate_speech.parquet"
+MULTI_NLI_S3      = "s3://guardrail-group-bucket/preprocessed/multi_nli/2025/11/02/multi_nli.parquet"
+WINO_BIAS_S3      = "s3://guardrail-group-bucket/preprocessed/wino_bias/2025/11/02/wino_bias.parquet"
+TRUTHFUL_QA_S3    = "s3://guardrail-group-bucket/preprocessed/truthful_qa_generation/2025/11/02/truthful_qa_generation.parquet"
+DOLLY_INSTR_S3    = "s3://guardrail-group-bucket/preprocessed/dolly_instructions/2025/11/02/dolly_instructions.parquet"
 
 
 # ============================================================
@@ -85,3 +90,4 @@ print(result.get("metadata"))
 
 guardrail_system.save_logs("fast_guardrail_logs.parquet")
 print("\nLogs saved to fast_guardrail_logs.parquet\n")
+
