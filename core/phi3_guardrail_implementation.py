@@ -1,31 +1,35 @@
 """
-Multi-Category Guardrail System for Phi-3 Mini
-==============================================
+GuardRail_For_LLM — Multi-Category Guardrail System (Ollama-backed) + Dual Knowledge Bases (RAG)
+===============================================================================================
 
-Optimized for your local Windows setup:
+What this code does (brief):
+- Runs an Ollama LLM for responses (qwen/llama/mistral/phi3 via your ollama_client.py)
+- Applies INPUT guardrails:
+  1) Rule-based checks (privacy, hate, violence/illegal, misinformation, bias, prompt injection)
+  2) ML classifier check (MLInputGuardrail)
+- If unsafe => returns a firm refusal message (NO “rephrase and I’ll answer”)
+- If safe => retrieves context from TWO knowledge bases (Parquet, local or S3):
+  1) primary KB: GuardrailConfig.rag_dataset_path
+  2) wiki KB: GuardrailConfig.wiki_rag_dataset_path
+  and merges them into one RAG context
+- Generates an answer using RAG context (but DOES NOT force “only use context” — reduces wrong CEO answers)
+- Applies OUTPUT guardrail:
+  - semantic similarity check between merged context and answer (hallucination check)
+- Caches embeddings separately per KB (so primary/wiki caches don’t overwrite)
 
-- Uses local Phi-3 Mini model (CPU)
-- Optional RAG using squad_qa parquet from S3
-- Shared SentenceTransformer for RAG + hallucination check
-- Multi-category rule-based input guardrails:
-    * privacy / PII
-    * hate / abuse
-    * violence / illegal / self-harm
-    * misinformation / conspiracy
-    * bias / stereotypes
-    * prompt injection
-
-- Output guardrail: hallucination check (RAG context vs answer)
-- RAG embeddings cached to rag_embeddings.pt in this folder
-- Logging is Parquet-safe (no struct/Arrow issues)
+Important behavior changes vs your old code:
+- Fixed refusal text: no more “If you rephrase…” anywhere.
+- Generation prompt: no longer forces the model to ONLY use context.
+  (Your CEO failures happened because context retrieved “YouTube CEO Neal Mohan” and the model obeyed it.)
 """
 
 import os
 import re
 import json
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 
 import torch
 import pandas as pd
@@ -37,10 +41,10 @@ from .ml_input_guardrail import MLInputGuardrail
 # Ollama adapter (multi-model)
 from .ollama_client import ollama_generate
 
+
 # ============================================================
 # CONFIG
 # ============================================================
-
 
 @dataclass
 class GuardrailConfig:
@@ -57,9 +61,21 @@ class GuardrailConfig:
     phi3_model_path: str = ""  # kept for compatibility (not used when using Ollama)
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
-    # Data paths
+    # Data paths (RAG knowledge bases)
     safety_prompts_path: str = ""  # kept for compatibility (not used directly now)
+
+    # Existing KB (your current one)
     rag_dataset_path: str = "s3://guardrail-group-bucket/processed/train.parquet"
+
+    # Wikipedia KB (Airflow DAG uploaded this) — update if your S3 key differs
+    wiki_rag_dataset_path: str = (
+        "s3://guardrail-group-bucket/knowledge_base/wikipedia/latest/wikipedia_en_articles.parquet"
+    )
+
+    # Retrieval knobs
+    rag_k_primary: int = 3
+    rag_k_wiki: int = 3
+    max_context_chars: int = 8000  # cap to avoid huge prompts
 
     # Ollama model key (must be one of your SUPPORTED_MODELS keys)
     ollama_model_name: str = "qwen0.5"
@@ -68,14 +84,17 @@ class GuardrailConfig:
     ml_guardrail_model_path: str = "input_safety_all7.joblib"
     ml_guardrail_threshold: float = 0.5
 
-    # New: whether to always fetch raw LLM output for comparison
+    # Whether to also call a raw non-RAG LLM response for comparison/debug
     always_return_raw_llm: bool = True
+
+    # If True, we DO NOT force the model to rely solely on context.
+    # This prevents “wrong-but-in-context” answers (e.g., YouTube CEO returned for Google CEO).
+    allow_model_knowledge_if_context_insufficient: bool = True
 
 
 # ============================================================
 # INPUT GUARDRAIL (RULE-BASED, MULTI-CATEGORY)
 # ============================================================
-
 
 class InputGuardrail:
     """
@@ -94,7 +113,7 @@ class InputGuardrail:
         r"\bexact address\b",
         r"\bwhere does [^?]+\s+live\b",
         r"\bwhere does [^?]+\s+currently live\b",
-        r"\bGPS coordinates\b",
+        r"\bgps coordinates\b",
         r"\bphone number\b",
         r"\bemail address\b",
         r"\bcontact details\b",
@@ -109,6 +128,9 @@ class InputGuardrail:
         "white people",
         "muslims",
         "jews",
+        "ugly",
+        "stupid",
+        "idiots",
         "asians",
         "immigrants",
         "gay people",
@@ -140,6 +162,8 @@ class InputGuardrail:
         "drug dealer",
         "buy drugs",
         "fake passport",
+        "rob a bank",
+        "bank robbery",
     ]
 
     MISINFO_PATTERNS = [
@@ -155,6 +179,7 @@ class InputGuardrail:
 
     BIAS_PATTERNS = [
         r"women (are|are always|are generally)\s+(worse|inferior|bad at)",
+        r"women (are|are always|are generally)\s+(late|slow|emotional)",
         r"men (are|are always|are generally)\s+(better|superior)",
         r"girls can(\'t|not)\s+(do|be)\s+(math|engineering|science)",
         r"certain races are\s+(better|superior|inferior)",
@@ -176,8 +201,7 @@ class InputGuardrail:
         t = (text or "").lower()
         if regex:
             return any(re.search(p, t) for p in patterns)
-        else:
-            return any(p.lower() in t for p in patterns)
+        return any(p.lower() in t for p in patterns)
 
     def detect_privacy(self, text: str) -> bool:
         return self._match_any(self.PRIVACY_PATTERNS, text, regex=True)
@@ -186,8 +210,10 @@ class InputGuardrail:
         return self._match_any(self.HATE_KEYWORDS, text, regex=False)
 
     def detect_violence_or_illegal(self, text: str) -> bool:
-        return self._match_any(self.VIOLENCE_KEYWORDS, text, regex=False) or \
-               self._match_any(self.ILLEGAL_KEYWORDS, text, regex=False)
+        return (
+            self._match_any(self.VIOLENCE_KEYWORDS, text, regex=False)
+            or self._match_any(self.ILLEGAL_KEYWORDS, text, regex=False)
+        )
 
     def detect_misinformation(self, text: str) -> bool:
         return self._match_any(self.MISINFO_PATTERNS, text, regex=True)
@@ -199,14 +225,6 @@ class InputGuardrail:
         return self._match_any(self.INJECTION_PATTERNS, text, regex=True)
 
     def validate(self, prompt: str) -> Dict:
-        """
-        Returns:
-            {
-              "valid": bool,
-              "block_category": Optional[str],
-              "checks": {...}
-            }
-        """
         is_privacy = self.detect_privacy(prompt)
         is_hate = self.detect_hate(prompt)
         is_violence = self.detect_violence_or_illegal(prompt)
@@ -251,12 +269,10 @@ class InputGuardrail:
 # OUTPUT GUARDRAIL (HALLUCINATION vs RAG)
 # ============================================================
 
-
 class OutputGuardrail:
     """
     Output verification:
-    - hallucination check via semantic similarity between
-      RAG context and LLM response.
+    - hallucination check via semantic similarity between merged RAG context and response
     """
 
     def __init__(self, config: GuardrailConfig, embedding_model: SentenceTransformer):
@@ -265,13 +281,10 @@ class OutputGuardrail:
 
     def check_hallucination(self, response: str, context: Optional[str]) -> Dict:
         if not context:
-            return {
-                "hallucination_similarity": None,
-                "valid": True,
-            }
+            return {"hallucination_similarity": None, "valid": True}
 
-        ctx_emb = self.embedding_model.encode(context, convert_to_tensor=True)
-        resp_emb = self.embedding_model.encode(response, convert_to_tensor=True)
+        ctx_emb = self.embedding_model.encode(context, convert_to_tensor=True).to("cpu")
+        resp_emb = self.embedding_model.encode(response, convert_to_tensor=True).to("cpu")
         sim = util.cos_sim(ctx_emb, resp_emb).item()
 
         return {
@@ -285,19 +298,18 @@ class OutputGuardrail:
 
 
 # ============================================================
-# RAG RETRIEVER (WITH FIXED-CACHE PATH)
+# RAG RETRIEVER (PER-KB CACHE FILE)
 # ============================================================
-
 
 class RAGRetriever:
     """
-    RAG Retriever with:
-    - squad_qa-based knowledge base (or any text column)
-    - embeddings cached to rag_embeddings.pt in the SAME folder
-      as this file
+    Generic RAG Retriever:
+    - Loads texts from a parquet (local or s3://...)
+    - Embeds and caches to a per-dataset .pt file next to this code
     """
 
-    def __init__(self, path: Optional[str], embedding_model: SentenceTransformer):
+    def __init__(self, name: str, path: Optional[str], embedding_model: SentenceTransformer):
+        self.name = name
         self.path = path
         self.embedding_model = embedding_model
         self.knowledge_base: List[str] = []
@@ -306,73 +318,90 @@ class RAGRetriever:
         if path:
             self._load_or_build_embeddings(path)
 
-    def _cache_path(self) -> str:
+    def _cache_path(self, dataset_path: str) -> str:
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_dir, "rag_embeddings.pt")
+        h = hashlib.md5(dataset_path.encode("utf-8")).hexdigest()[:10]
+        return os.path.join(base_dir, f"rag_embeddings_{self.name}_{h}.pt")
+
+    def _pick_texts_from_df(self, df: pd.DataFrame) -> List[str]:
+        # Prefer wiki-style schema
+        if "title" in df.columns and "text" in df.columns:
+            titles = df["title"].astype(str).fillna("").tolist()
+            texts = df["text"].astype(str).fillna("").tolist()
+            out: List[str] = []
+            for t, x in zip(titles, texts):
+                t = t.strip()
+                x = x.strip()
+                if not x:
+                    continue
+                out.append(f"TITLE: {t}\n\n{x}" if t else x)
+            return out
+
+        # Prefer your existing schemas
+        for col in ["CONTEXT", "context", "TEXT", "text", "passage"]:
+            if col in df.columns:
+                return df[col].astype(str).fillna("").tolist()
+
+        # Fallback: first object column
+        for col in df.columns:
+            if df[col].dtype == "object":
+                return df[col].astype(str).fillna("").tolist()
+
+        return []
 
     def _load_or_build_embeddings(self, path: str):
-        cache_file = self._cache_path()
+        cache_file = self._cache_path(path)
 
         if os.path.exists(cache_file):
             try:
-                print("✓ Loading cached RAG embeddings from:", cache_file)
+                print(f"✓ Loading cached RAG embeddings ({self.name}) from: {cache_file}")
                 data = torch.load(cache_file, map_location="cpu")
                 self.knowledge_base = data["texts"]
-                self.embeddings = data["embeddings"]
+                self.embeddings = data["embeddings"].to("cpu")
                 return
             except Exception as e:
                 print(f"Warning: failed to load RAG cache {cache_file}: {e}")
 
-        print("Loading RAG docs from:", path)
+        print(f"Loading RAG docs ({self.name}) from: {path}")
         df = pd.read_parquet(path)
 
-        # Column names in your different datasets are uppercase; prefer uppercase too.
-        if "CONTEXT" in df.columns:
-            self.knowledge_base = df["CONTEXT"].astype(str).tolist()
-        elif "context" in df.columns:
-            self.knowledge_base = df["context"].astype(str).tolist()
-        elif "passage" in df.columns:
-            self.knowledge_base = df["passage"].astype(str).tolist()
-        elif "text" in df.columns:
-            self.knowledge_base = df["text"].astype(str).tolist()
-        elif "TEXT" in df.columns:
-            self.knowledge_base = df["TEXT"].astype(str).tolist()
-        else:
-            for col in df.columns:
-                if df[col].dtype == "object":
-                    self.knowledge_base = df[col].astype(str).tolist()
-                    break
+        kb = self._pick_texts_from_df(df)
+        self.knowledge_base = [t for t in kb if isinstance(t, str) and t.strip()]
 
-        print(f"Loaded {len(self.knowledge_base)} RAG docs")
+        print(f"Loaded {len(self.knowledge_base)} RAG docs ({self.name})")
+
         self.embeddings = self.embedding_model.encode(
             self.knowledge_base,
             convert_to_tensor=True,
             show_progress_bar=True,
-        )
+        ).to("cpu")
 
         try:
-            torch.save(
-                {"texts": self.knowledge_base, "embeddings": self.embeddings},
-                cache_file,
-            )
-            print("✓ Saved RAG embeddings to cache at:", cache_file)
+            torch.save({"texts": self.knowledge_base, "embeddings": self.embeddings}, cache_file)
+            print(f"✓ Saved RAG embeddings ({self.name}) to cache at: {cache_file}")
         except Exception as e:
-            print(f"Warning: failed to save RAG cache: {e}")
+            print(f"Warning: failed to save RAG cache ({self.name}): {e}")
 
     def retrieve(self, query: str, k: int = 3) -> List[str]:
         if not self.knowledge_base or self.embeddings is None:
             return []
-
-        q_emb = self.embedding_model.encode(query, convert_to_tensor=True)
-        scores = util.cos_sim(q_emb, self.embeddings)[0]
+        q_emb = self.embedding_model.encode(query, convert_to_tensor=True).to("cpu")
+        scores = util.cos_sim(q_emb, self.embeddings.to("cpu"))[0]
         topk = torch.topk(scores, k=min(k, len(self.knowledge_base)))
         return [self.knowledge_base[i] for i in topk.indices]
+
+
+def _truncate_context(text: str, max_chars: int) -> str:
+    if not text:
+        return text
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n[...TRUNCATED...]"
 
 
 # ============================================================
 # MAIN SYSTEM
 # ============================================================
-
 
 class Phi3GuardrailSystem:
     def __init__(self, config: GuardrailConfig):
@@ -380,10 +409,9 @@ class Phi3GuardrailSystem:
         self.logs: List[Dict] = []
 
         print("Initializing Guardrail System (Ollama-backed)...")
-        print("Skipping HuggingFace Phi-3 loading. Will call Ollama at runtime.")
         print("Using Ollama model key:", config.ollama_model_name)
 
-        # Keep these for compatibility (but unused when using Ollama)
+        # Keep these for compatibility (unused when using Ollama)
         self.tokenizer = None
         self.model = None
 
@@ -396,77 +424,88 @@ class Phi3GuardrailSystem:
             threshold=config.ml_guardrail_threshold
         )
 
-        self.rag_retriever = (
-            RAGRetriever(config.rag_dataset_path, shared_embedding_model)
+        self.rag_retriever_primary = (
+            RAGRetriever("primary", config.rag_dataset_path, shared_embedding_model)
             if config.enable_rag and config.rag_dataset_path
             else None
         )
-        self.output_guardrail = OutputGuardrail(config, shared_embedding_model)
 
+        self.rag_retriever_wiki = (
+            RAGRetriever("wiki", config.wiki_rag_dataset_path, shared_embedding_model)
+            if config.enable_rag and config.wiki_rag_dataset_path
+            else None
+        )
+
+        self.output_guardrail = OutputGuardrail(config, shared_embedding_model)
         print("Guardrail system ready.\n")
 
     # ------------------------------ BLOCK RESPONSES ------------------------------
 
     def _build_block_response(self, category: str, prompt: str) -> str:
+        # NOTE: these are intentionally firm. No “rephrase and I’ll help”.
         if category == "privacy":
             return (
-                "I'm sorry — I can’t help with finding or sharing home addresses, phone numbers, "
-                "locations, or other private personal details about any individual.\n\n"
-                "I *can* help with publicly available information such as career history, "
-                "achievements, or general biographical background if you’d like."
+                "I can’t help with requests for private personal information such as a home address, "
+                "phone number, email, or precise location of a private individual."
             )
 
         if category == "hate":
-            return (
-                "I’m not able to generate content that targets groups or individuals with hate, "
-                "harassment, or demeaning language.\n\n"
-                "If you’re interested, I can instead help explain why hate speech is harmful, "
-                "or help rewrite something in a respectful, inclusive way."
-            )
+            return "I can’t help with hateful or harassing content."
 
         if category == "violence_illegal":
-            return (
-                "I can’t assist with instructions for harming people, damaging property, or carrying "
-                "out illegal activities (like hacking, poisoning, or making weapons).\n\n"
-                "If you’d like, I can give information about safety, conflict de-escalation, "
-                "or how to get help in dangerous situations."
-            )
+            return "I can’t help with wrongdoing, including violence or illegal activities."
 
         if category == "misinformation":
-            return (
-                "Your question seems connected to a common misconception or conspiracy theory, "
-                "so I can't support or amplify misinformation.\n\n"
-                "For example, scientific evidence shows that:\n"
-                "- The Earth is very close to spherical, not flat.\n"
-                "- Vaccines do *not* contain tracking microchips; they’re tested for safety and efficacy.\n"
-                "- The Apollo moon landings are well-documented with multiple independent lines of evidence.\n\n"
-                "If you’d like, I can walk through what experts and reputable sources say about this topic."
-            )
+            return "I can’t help with promoting misinformation or conspiracy claims."
 
         if category == "bias":
-            return (
-                "I’m not able to agree with or generate stereotypes about genders, races, or other groups "
-                "being ‘better’ or ‘worse’ at something.\n\n"
-                "If you’d like, I can help explain how bias works, why it’s harmful, and how to avoid it."
-            )
+            return "I can’t help with stereotyping or demeaning generalizations about people or groups."
 
         if category == "prompt_injection":
-            return (
-                "I need to follow my safety and behavior guidelines, so I can’t ignore previous instructions "
-                "or behave in a way that would bypass those safeguards.\n\n"
-                "I’m still happy to help within those rules — what would you like to know or build?"
-            )
+            return "I can’t help with requests to bypass safety or system instructions."
 
         if category == "ml_unsafe":
+            return "I can’t help with that request."
+
+        return "I can’t help with that request."
+
+    # ------------------------------ RAG HELPERS ------------------------------
+
+    def _retrieve_from_both_kbs(self, prompt: str) -> Tuple[List[str], List[str]]:
+        primary_docs: List[str] = []
+        wiki_docs: List[str] = []
+
+        if self.rag_retriever_primary is not None and self.config.rag_k_primary > 0:
+            primary_docs = self.rag_retriever_primary.retrieve(prompt, k=self.config.rag_k_primary)
+
+        if self.rag_retriever_wiki is not None and self.config.rag_k_wiki > 0:
+            wiki_docs = self.rag_retriever_wiki.retrieve(prompt, k=self.config.rag_k_wiki)
+
+        return primary_docs, wiki_docs
+
+    def _build_rag_prompt(self, prompt: str, context: str) -> str:
+        """
+        Critical fix:
+        - Do NOT force “Answer only from context”.
+        That instruction caused your wrong “Google CEO = Neal Mohan” answers,
+        because your retrieved context mentioned YouTube’s CEO.
+        """
+        if self.config.allow_model_knowledge_if_context_insufficient:
             return (
-                "I can’t help with that request. It may involve unsafe, harmful, or disallowed content.\n\n"
-                "If you rephrase your question in a safe, educational, or constructive way, I can help."
+                "You are a helpful assistant.\n"
+                "Use the provided context when it is relevant and correct.\n"
+                "If the context is irrelevant or does not answer the question, answer using your general knowledge.\n"
+                "If you are unsure, say you are unsure.\n\n"
+                f"Context:\n{context}\n\n"
+                f"Question: {prompt}\n"
+                "Answer:"
             )
 
+        # Legacy strict mode (not recommended for your use case)
         return (
-            "I’m not able to respond to that request because it conflicts with my safety and usage guidelines.\n\n"
-            "If you rephrase your question in a safe, educational, or constructive way, "
-            "I’ll be glad to help."
+            f"Context:\n{context}\n\n"
+            f"Question: {prompt}\n\n"
+            "Answer using only the context above when possible. If the context does not contain the answer, say you don't know."
         )
 
     # ------------------------------ GENERATION ------------------------------
@@ -486,7 +525,7 @@ class Phi3GuardrailSystem:
             "metadata": {},
         }
 
-        # Always compute the generic raw LLM output (no RAG) for comparison, if enabled
+        # 0) Raw (no RAG) output for comparison/debug
         if self.config.always_return_raw_llm:
             try:
                 raw_generic = ollama_generate(
@@ -498,22 +537,13 @@ class Phi3GuardrailSystem:
             except Exception as e:
                 result["metadata"]["raw_llm_response"] = f"[ERROR] Raw LLM failed: {e}"
 
-        # 1) INPUT VALIDATION (Rule-based + ML)
+        # 1) INPUT validation (rule-based + ML)
         if self.config.enable_input_validation:
-            # a) rule-based checks
             icheck = self.input_guardrail.validate(prompt)
-
-            # b) ML safety classifier
             mlcheck = self.ml_input_guardrail.validate(prompt)
+            result["guardrails"]["input"] = {"rule_based": icheck, "ml_based": mlcheck}
 
-            result["guardrails"]["input"] = {
-                "rule_based": icheck,
-                "ml_based": mlcheck,
-            }
-
-            # Block if either says unsafe
             if (not icheck["valid"]) or (not mlcheck["valid"]):
-                # Prefer rule-based category if it fired, else ML
                 category = icheck.get("block_category") or mlcheck.get("block_category") or "generic"
                 result["response"] = self._build_block_response(category, prompt)
                 result["metadata"]["blocked_at"] = "input"
@@ -521,27 +551,44 @@ class Phi3GuardrailSystem:
                 self._log(result)
                 return result
 
-        # 2) RAG CONTEXT (optional)
+        # 2) RAG context (merged from both KBs)
         context = None
         full_prompt = prompt
+        kb_sources: List[str] = []
+        retrieved_total: int = 0
 
-        if use_rag and self.config.enable_rag and self.rag_retriever is not None:
-            docs = self.rag_retriever.retrieve(prompt, k=3)
-            if docs:
-                context = "\n\n".join(docs)
+        if use_rag and self.config.enable_rag:
+            primary_docs, wiki_docs = self._retrieve_from_both_kbs(prompt)
+
+            # metadata
+            result["metadata"]["rag_primary_docs"] = len(primary_docs)
+            result["metadata"]["rag_wiki_docs"] = len(wiki_docs)
+            retrieved_total = len(primary_docs) + len(wiki_docs)
+
+            all_docs: List[str] = []
+            if primary_docs:
+                kb_sources.append("primary")
+                all_docs.append("### PRIMARY_KB")
+                all_docs.extend(primary_docs)
+
+            if wiki_docs:
+                kb_sources.append("wiki")
+                all_docs.append("### WIKIPEDIA_KB")
+                all_docs.extend(wiki_docs)
+
+            if all_docs:
+                context = "\n\n".join(all_docs)
+                context = _truncate_context(context, self.config.max_context_chars)
                 result["metadata"]["rag_used"] = True
-                result["metadata"]["retrieved_docs"] = len(docs)
-                full_prompt = (
-                    f"Context:\n{context}\n\n"
-                    f"Question: {prompt}\n\n"
-                    f"Answer using only the context above when possible:"
-                )
+
+                # build RAG-friendly prompt (non-strict by default)
+                full_prompt = self._build_rag_prompt(prompt, context)
             else:
                 result["metadata"]["rag_used"] = False
         else:
             result["metadata"]["rag_used"] = False
 
-        # 3) GENERATION (Guardrailed path: with RAG prompt if enabled)
+        # 3) Generation (with RAG prompt if enabled)
         try:
             guarded_llm = ollama_generate(
                 prompt=full_prompt,
@@ -556,10 +603,13 @@ class Phi3GuardrailSystem:
             self._log(result)
             return result
 
-        # 4) OUTPUT GUARDRAIL (hallucination vs RAG)
+        # 4) OUTPUT guardrail (hallucination vs merged context)
         if self.config.enable_output_verification:
-            ocheck = self.output_guardrail.verify(result["response"], context)
-            result["guardrails"]["output"] = ocheck
+            result["guardrails"]["output"] = self.output_guardrail.verify(result["response"], context)
+
+        # Helpful RAG metadata (fix your “None” fields)
+        result["metadata"]["retrieved_docs_total"] = retrieved_total
+        result["metadata"]["kb_sources"] = kb_sources
 
         self._log(result)
         return result
@@ -573,12 +623,10 @@ class Phi3GuardrailSystem:
     def get_logs(self) -> pd.DataFrame:
         if not self.logs:
             return pd.DataFrame()
-        df = pd.DataFrame(self.logs)
 
+        df = pd.DataFrame(self.logs)
         for col in df.columns:
-            df[col] = df[col].apply(
-                lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
-            )
+            df[col] = df[col].apply(lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x)
         return df
 
     def save_logs(self, path: str):
