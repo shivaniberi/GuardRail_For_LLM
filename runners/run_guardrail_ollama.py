@@ -1,27 +1,36 @@
-# runners/run_guardrail_ollama.py
-# Full runnable script to use:
-# - Ollama model (qwen0.5 / qwen2.5 / llama3.1 / mistral / phi3)
-# - your guardrail pipeline
-# - interactive: type prompt manually in terminal
-# - prints TWO replies:
-#     1) raw LLM (no guardrail / no RAG)
-#     2) final guardrailed response (may be blocked, may use RAG)
-#
-# IMPORTANT:
-# This assumes your core GuardrailConfig supports BOTH:
-#   - rag_dataset_path (your original KB)
-#   - wiki_rag_dataset_path (your Wikipedia KB)
-#
-# Wikipedia parquet you uploaded:
-#   s3://guardrail-group-bucket/knowledge_base/wikipedia/latest/simplewiki_articles.parquet
+"""
+Interactive Guardrail Runner (Ollama-backed)
+===========================================
 
-from core.phi3_guardrail_implementation import GuardrailConfig, Phi3GuardrailSystem
+This script runs the GuardrailSystem interactively in the terminal.
+
+What it does:
+- Uses an Ollama LLM (qwen / llama / mistral / phi3, etc.)
+- Applies:
+    • Rule-based input guardrails
+    • ML-based safety classifier
+    • Dual RAG knowledge bases:
+        1) Primary dataset (original KB)
+        2) Wikipedia dataset (knowledge_base/wikipedia in S3)
+    • Output hallucination verification
+- Prints:
+    1) Raw LLM response (no RAG, no guardrail influence)
+    2) Final guarded response (after safety + RAG)
+    3) Input guardrail results
+    4) Output guardrail results
+    5) RAG metadata (retrieved documents, KB sources)
+
+This allows comparison between the model’s original answer
+and the safety-grounded answer.
+"""
+
+from core.guardrail_implementation import GuardrailConfig, GuardrailSystem
 
 
 def main():
-    # CHANGE model here if needed:
+    # Model options:
     # "qwen0.5", "qwen2.5", "llama3", "mistral", "phi3"
-    model_to_test = "llama3"
+    model_to_test = "phi3"
 
     config = GuardrailConfig(
         enable_input_validation=True,
@@ -29,20 +38,17 @@ def main():
         enable_rag=True,
         enable_logging=True,
 
-        # Primary (your original KB)
+        # Primary knowledge base
         rag_dataset_path="s3://guardrail-group-bucket/processed/train.parquet",
 
-        # Wikipedia KB (NEW)
+        # Wikipedia knowledge base
         wiki_rag_dataset_path="s3://guardrail-group-bucket/knowledge_base/wikipedia/latest/simplewiki_articles.parquet",
 
-        # Model
         ollama_model_name=model_to_test,
-
-        # Show raw model output for comparison
         always_return_raw_llm=True,
     )
 
-    system = Phi3GuardrailSystem(config)
+    system = GuardrailSystem(config)
 
     print("\nGuardrail system ready.")
     print("Type your prompt below (type 'exit' to quit)\n")
@@ -78,14 +84,15 @@ def main():
         print("\n=== OUTPUT GUARDRAIL ===")
         print(result.get("guardrails", {}).get("output"))
 
-        # Helpful debug: show whether RAG was used
         meta = result.get("metadata", {}) or {}
         print("\n=== RAG METADATA ===")
         print(
             {
                 "rag_used": meta.get("rag_used"),
-                "retrieved_docs_total": meta.get("retrieved_docs"),
+                "retrieved_docs_total": meta.get("retrieved_docs_total"),
                 "kb_sources": meta.get("kb_sources"),
+                "rag_primary_docs": meta.get("rag_primary_docs"),
+                "rag_wiki_docs": meta.get("rag_wiki_docs"),
             }
         )
 

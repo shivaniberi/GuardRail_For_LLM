@@ -403,7 +403,7 @@ def _truncate_context(text: str, max_chars: int) -> str:
 # MAIN SYSTEM
 # ============================================================
 
-class Phi3GuardrailSystem:
+class GuardrailSystem:
     def __init__(self, config: GuardrailConfig):
         self.config = config
         self.logs: List[Dict] = []
