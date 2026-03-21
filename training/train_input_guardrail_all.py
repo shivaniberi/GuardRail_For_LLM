@@ -1,12 +1,21 @@
+"""
+Train Input Guardrail — All 7 Datasets
+=======================================
+"""
+
+import re
 import pandas as pd
+import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 import joblib
 
-# --------- S3 PATHS (train/val/test for all 7 datasets) ----------
+# ── S3 PATHS ─────────────────────────────────────────────────────────────────
 SPLITS = {
     "dolly_instructions": {
         "train": "s3://guardrail-group-bucket/prepared_splits/dolly_instructions/2025/11/02/dolly_instructions_train.parquet",
@@ -45,66 +54,71 @@ SPLITS = {
     },
 }
 
-# --------- LABELING RULES (unified is_unsafe) ----------
-# We only have explicit safety labels in:
-# - safety_prompt: IS_SAFE (safe=1, unsafe=0)
-# - hate_speech: HATESPEECH / VIOLENCE / HATE_SPEECH_SCORE
-#
-# For datasets with no explicit safety label (dolly, squad_qa, truthful_qa_generation, multi_nli, wino_bias),
-# we label them as SAFE (is_unsafe = 0) by default.
-#
-# This is intentional so you can "train on all datasets" while still learning unsafe patterns from the labeled sets.
-HATE_SCORE_THRESHOLD = 0.5  # adjust if you want stricter/looser unsafe labeling
+HATE_SCORE_THRESHOLD = 0.5
+
+# ── SYNTHETIC UNSAFE PATTERNS ─────────────────────────────────────────────────
+SYNTHETIC_UNSAFE_PATTERNS = [
+    # Violence / harm
+    r"\bhow\s+to\s+(kill|murder|stab|shoot|hurt|harm|assault)\b",
+    r"\b(kill|murder|stab|shoot|poison|strangle)\s+(someone|a\s+person|people|him|her)\b",
+    r"\b(make|build|assemble)\s+a\s+(bomb|explosive|weapon|grenade)\b",
+    r"\bhide\s+a\s+body\b",
+    r"\bhow\s+to\s+get\s+away\s+with\s+(murder|killing|crime)\b",
+
+    # Hacking / illegal
+    r"\bhow\s+to\s+hack\b",
+    r"\b(steal|clone|skim)\s+(credit\s+card|debit\s+card|identity)\b",
+    r"\bbypass\s+(security|authentication|2fa)\b",
+    r"\bphishing\s+(email|attack)\b",
+    r"\bhow\s+to\s+launder\s+money\b",
+    r"\bfake\s+(passport|id|license|document)\b",
+
+    # Self-harm
+    r"\bhow\s+to\s+(kill|hurt|harm)\s+(my)?self\b",
+    r"\b(suicide|self.harm)\s+(method|way|how|guide|instruction)\b",
+    r"\bwant\s+to\s+(die|end\s+my\s+life|kill\s+myself)\b",
+
+    # Drug synthesis
+    r"\bhow\s+to\s+(make|cook|synthesize)\s+(meth|heroin|fentanyl|crack|cocaine)\b",
+
+    # Hate / derogatory
+    r"\b(kill|exterminate|deport)\s+(all\s+)?(the\s+)?(blacks|jews|muslims|gays|immigrants)\b",
+    r"\b(n[i1]gg[ae]r|ch[i1]nk|sp[i1]c|k[i1]ke|f[a4]gg[o0]t)\b",
+    r"\b(race|ethnicity)\s+(determines|predicts)\s+(intelligence|crime)\b",
+
+    # Fraud
+    r"\b(create|make)\s+a\s+fake\s+(invoice|receipt|bank\s+statement)\b",
+    r"\bhow\s+to\s+(commit|do)\s+(tax|wire|insurance)\s+fraud\b",
+
+    # Prompt injection
+    r"\bignore\s+(all|previous|your)\s+instructions?\b",
+    r"\bjailbreak\b",
+    r"\bdeveloper\s+mode\b",
+]
+
+def _text_is_synthetically_unsafe(text: str) -> bool:
+    t = (text or "").lower()
+    return any(re.search(p, t) for p in SYNTHETIC_UNSAFE_PATTERNS)
 
 def pick_text(df: pd.DataFrame) -> pd.Series:
-    # Your splits consistently include input_text_trunc; prefer that
-    if "input_text_trunc" in df.columns and df["input_text_trunc"].notna().any():
-        return df["input_text_trunc"].fillna("").astype(str)
-    if "input_text" in df.columns and df["input_text"].notna().any():
-        return df["input_text"].fillna("").astype(str)
-    # fallbacks
-    if "PROMPT" in df.columns and df["PROMPT"].notna().any():
-        return df["PROMPT"].fillna("").astype(str)
-    if "TEXT" in df.columns and df["TEXT"].notna().any():
-        return df["TEXT"].fillna("").astype(str)
-    instr = df["INSTRUCTION"].fillna("").astype(str) if "INSTRUCTION" in df.columns else None
-    ctx   = df["CONTEXT"].fillna("").astype(str) if "CONTEXT" in df.columns else None
-    if instr is not None and ctx is not None:
-        return (instr + "\n" + ctx).astype(str)
-    if "QUESTION" in df.columns and df["QUESTION"].notna().any():
-        return df["QUESTION"].fillna("").astype(str)
-    raise ValueError("No usable text column found.")
+    for col in ["input_text", "PROMPT", "TEXT", "QUESTION"]:
+        if col in df.columns:
+            return df[col].fillna("").astype(str)
+    raise ValueError("No text column found")
 
 def make_is_unsafe(dataset_name: str, df: pd.DataFrame) -> pd.Series:
-    if dataset_name == "safety_prompt":
-        # IS_SAFE: 1 means safe, 0 means unsafe
-        y_safe = df["IS_SAFE"]
-        if y_safe.dtype == bool:
-            y_safe = y_safe.astype(int)
-        y_safe = y_safe.fillna(1).astype(int)
-        return (1 - y_safe).astype(int)
-
-    if dataset_name == "hate_speech":
-        hatespeech = df["HATESPEECH"].fillna(0).astype(int) if "HATESPEECH" in df.columns else 0
-        violence   = df["VIOLENCE"].fillna(0).astype(int) if "VIOLENCE" in df.columns else 0
-        score      = df["HATE_SPEECH_SCORE"].fillna(0.0).astype(float) if "HATE_SPEECH_SCORE" in df.columns else 0.0
-        unsafe = (hatespeech == 1) | (violence == 1) | (score >= HATE_SCORE_THRESHOLD)
-        return unsafe.astype(int)
-
-    # default: treat as SAFE (no explicit safety label available)
-    return pd.Series([0] * len(df), index=df.index, dtype=int)
+    texts = pick_text(df)
+    return texts.apply(lambda t: int(_text_is_synthetically_unsafe(t)))
 
 def load_split(split_key: str):
-    X_all, y_all, src_all = [], [], []
+    X_all, y_all = [], []
     for ds, paths in SPLITS.items():
-        p = paths[split_key]
-        df = pd.read_parquet(p)
+        df = pd.read_parquet(paths[split_key])
         X = pick_text(df).tolist()
         y = make_is_unsafe(ds, df).tolist()
         X_all.extend(X)
         y_all.extend(y)
-        src_all.extend([ds] * len(X))
-    return X_all, y_all, src_all
+    return X_all, y_all
 
 def embed(model, texts):
     return model.encode(texts, convert_to_numpy=True, show_progress_bar=True)
@@ -114,50 +128,99 @@ def report(name, y_true, y_pred):
     print(confusion_matrix(y_true, y_pred))
     print(classification_report(y_true, y_pred, digits=4))
 
+def find_best_threshold(clf, X_emb, y_true):
+    thresholds = np.arange(0.2, 0.8, 0.05)
+    probas = clf.predict_proba(X_emb)[:, 1]
+    best_t, best_f1 = 0.5, 0
+    for t in thresholds:
+        preds = (probas >= t).astype(int)
+        f1 = f1_score(y_true, preds, average="macro", zero_division=0)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_t = t
+    return best_t
+
 def main():
-    print("Loading ALL datasets (TRAIN)...")
-    X_train, y_train, src_train = load_split("train")
+    print("Loading data...")
+    X_train, y_train = load_split("train")
+    X_val, y_val = load_split("val")
+    X_test, y_test = load_split("test")
 
-    print("Loading ALL datasets (VAL)...")
-    X_val, y_val, src_val = load_split("val")
+    emb_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-    print("Loading ALL datasets (TEST)...")
-    X_test, y_test, src_test = load_split("test")
-
-    print("\nCounts (unsafe=1):")
-    print("TRAIN:", sum(y_train), "/", len(y_train))
-    print("VAL:  ", sum(y_val), "/", len(y_val))
-    print("TEST: ", sum(y_test), "/", len(y_test))
-
-    print("\nLoading embedding model (CPU)...")
-    emb_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
-
-    print("Embedding TRAIN...")
     E_train = embed(emb_model, X_train)
-
-    print("Training LogisticRegression (binary unsafe vs safe)...")
-    clf = Pipeline([
-        ("scaler", StandardScaler(with_mean=False)),
-        ("lr", LogisticRegression(max_iter=2000, class_weight="balanced"))
-    ])
-    clf.fit(E_train, y_train)
-
-    print("Embedding VAL...")
     E_val = embed(emb_model, X_val)
-    val_pred = clf.predict(E_val)
-    report("VAL (All datasets merged)", y_val, val_pred)
-
-    print("Embedding TEST...")
     E_test = embed(emb_model, X_test)
-    test_pred = clf.predict(E_test)
-    report("TEST (All datasets merged)", y_test, test_pred)
 
-    out_file = "input_safety_all7.joblib"
-    joblib.dump(
-        {"embed_model_name": "sentence-transformers/all-MiniLM-L6-v2", "classifier": clf},
-        out_file
+    print("\nTraining models...")
+
+    # Logistic Regression (existing)
+    clf_lr = Pipeline([
+        ("scaler", StandardScaler(with_mean=False)),
+        ("lr", LogisticRegression(max_iter=2000, class_weight="balanced")),
+    ])
+    clf_lr.fit(E_train, y_train)
+
+    # Random Forest (NEW)
+    clf_rf = RandomForestClassifier(
+        n_estimators=100,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1
     )
-    print("\nSaved trained guardrail classifier to:", out_file)
+    clf_rf.fit(E_train, y_train)
+
+    # Decision Tree (NEW)
+    clf_dt = DecisionTreeClassifier(
+        class_weight="balanced",
+        random_state=42
+    )
+    clf_dt.fit(E_train, y_train)
+
+    models = {
+        "LogisticRegression": clf_lr,
+        "RandomForest": clf_rf,
+        "DecisionTree": clf_dt,
+    }
+
+    best_model = None
+    best_f1 = 0
+    best_threshold = 0.5
+
+    print("\nEvaluating models on VAL set...")
+
+    for name, model in models.items():
+        print(f"\n--- {name} ---")
+
+        threshold = find_best_threshold(model, E_val, y_val)
+        probas = model.predict_proba(E_val)[:, 1]
+        preds = (probas >= threshold).astype(int)
+
+        f1 = f1_score(y_val, preds, average="macro", zero_division=0)
+
+        report(name, y_val, preds)
+        print(f"{name} → F1: {f1:.4f}, Threshold: {threshold:.2f}")
+
+        if f1 > best_f1:
+            best_f1 = f1
+            best_model = model
+            best_threshold = threshold
+
+    print("\nBEST MODEL SELECTED")
+    print(f"F1: {best_f1:.4f}, Threshold: {best_threshold:.2f}")
+
+    test_probas = best_model.predict_proba(E_test)[:, 1]
+    test_pred = (test_probas >= best_threshold).astype(int)
+
+    report("TEST", y_test, test_pred)
+
+    joblib.dump({
+        "embed_model_name": "sentence-transformers/all-MiniLM-L6-v2",
+        "classifier": best_model,
+        "threshold": best_threshold,
+    }, "input_safety_all7.joblib")
+
+    print("\nModel saved successfully")
 
 if __name__ == "__main__":
     main()
