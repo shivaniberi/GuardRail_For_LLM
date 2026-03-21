@@ -96,7 +96,7 @@ def safe_json_loads(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def re_prompt_judge(raw: str, model_name: str = "phi3", timeout: int = 30) -> dict:
+def re_prompt_judge(raw: str, model_name: str = "qwen2.5", timeout: int = 30) -> dict:
     """
     Ask a fresh LLM agent to reformat malformed judge output into strict JSON.
     """
@@ -629,7 +629,7 @@ def main():
         rounds = 2
 
     cfg = GuardrailConfig()
-    cfg.ollama_model_name = "phi3"
+    cfg.ollama_model_name = "qwen2.5"
 
     ml_ok = check_ml_model(cfg)
     if not ml_ok:
