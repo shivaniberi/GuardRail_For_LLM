@@ -72,16 +72,16 @@ pip install --break-system-packages -r requirements.txt
 ## Quick Start
 
 ```python
-from phi3_guardrail_implementation import Phi3GuardrailSystem, GuardrailConfig
+from guardrail_implementation import GuardrailSystem, GuardrailConfig
 
 config = GuardrailConfig(
-    phi3_model_path="/content/drive/MyDrive/phi-3-mini",
+    model_path="/content/drive/MyDrive/phi-3-mini",
     confidence_threshold=0.7,
     toxicity_threshold=0.5,
     enable_rag=True
 )
 
-system = Phi3GuardrailSystem(config)
+system = GuardrailSystem(config)
 
 result = system.generate_with_guardrails("What is quantum computing?")
 print(result["response"])
@@ -176,7 +176,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 ### Docker
 
 ```bash
-docker build -t phi3-guardrails .
+docker build -t guardrails .
 docker run -p 8000:8000 phi3-guardrails
 ```
 
