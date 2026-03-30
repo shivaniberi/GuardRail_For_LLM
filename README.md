@@ -2,7 +2,8 @@
 
 This project provides a complete guardrail framework for the Large language model. It introduces safety, reliability, and factual-accuracy checks around model inputs and outputs, ensuring more trustworthy and controlled deployments.
 
-<div align="center"> <img width="593" height="383" alt="image" src="https://github.com/user-attachments/assets/3059c48d-7967-47c4-b55e-30dae6550604" /> </div>
+<img width="799" height="591" alt="Screenshot 2026-03-29 at 9 17 03 PM" src="https://github.com/user-attachments/assets/283506bc-2149-4a8c-b72d-7e7fa9fd5fcd" />
+
 
 <img width="2780" height="779" alt="image" src="https://github.com/user-attachments/assets/30fd90f1-b44f-482c-965a-ea46ae567ca0" />
 
