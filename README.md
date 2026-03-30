@@ -90,6 +90,10 @@ This project leverages several datasets for evaluation and guardrail logic:
 | Dolly Instruction Set | Instruction-following behavior |
 | MultiNLI              | Factual consistency validation |
 
+
+<img width="1128" height="552" alt="Screenshot 2026-03-29 at 9 25 46 PM" src="https://github.com/user-attachments/assets/1bf9ed0d-02f2-4490-b357-e8b382c20918" />
+
+
 ---
 
 ## Components
