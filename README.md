@@ -4,8 +4,9 @@ This project provides a complete guardrail framework for the Large language mode
 
 <img width="799" height="591" alt="Screenshot 2026-03-29 at 9 17 03 PM" src="https://github.com/user-attachments/assets/283506bc-2149-4a8c-b72d-7e7fa9fd5fcd" />
 
+<img width="913" height="488" alt="Screenshot 2026-03-29 at 9 17 30 PM" src="https://github.com/user-attachments/assets/9b387ccd-254c-45e0-aff6-b1c92a27dabd" />
 
-<img width="2780" height="779" alt="image" src="https://github.com/user-attachments/assets/30fd90f1-b44f-482c-965a-ea46ae567ca0" />
+
 
 ---
 
