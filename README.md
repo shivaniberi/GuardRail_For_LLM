@@ -2,9 +2,6 @@
 
 This project provides a complete guardrail framework for the Large language model. It introduces safety, reliability, and factual-accuracy checks around model inputs and outputs, ensuring more trustworthy and controlled deployments.
 
-<img width="799" height="591" alt="Screenshot 2026-03-29 at 9 17 03 PM" src="https://github.com/user-attachments/assets/283506bc-2149-4a8c-b72d-7e7fa9fd5fcd" />
-
-<img width="913" height="488" alt="Screenshot 2026-03-29 at 9 17 30 PM" src="https://github.com/user-attachments/assets/9b387ccd-254c-45e0-aff6-b1c92a27dabd" />
 
 
 
@@ -35,31 +32,17 @@ Key features include:
 ---
 
 ## Architecture
+<img width="799" height="591" alt="Screenshot 2026-03-29 at 9 17 03 PM" src="https://github.com/user-attachments/assets/283506bc-2149-4a8c-b72d-7e7fa9fd5fcd" />
 
-```
-User Prompt
-   ↓
-Input Guardrails (toxicity, safety, injection checks)
-   ↓
-Optional RAG Retrieval (context grounding)
-   ↓
-Phi-3-Mini Model (response generation)
-   ↓
-Output Guardrails (hallucination, confidence, toxicity, bias)
-   ↓
-Monitoring & Logging
-```
+<img width="913" height="488" alt="Screenshot 2026-03-29 at 9 17 30 PM" src="https://github.com/user-attachments/assets/9b387ccd-254c-45e0-aff6-b1c92a27dabd" />
 
 ---
 
 ## Setup
 
 ### Requirements
+<img width="692" height="480" alt="Screenshot 2026-03-29 at 9 19 17 PM" src="https://github.com/user-attachments/assets/de50c293-ed79-4d88-9c1e-667a3eacf109" />
 
-* Python 3.8+
-* GPU recommended (optional)
-* 16GB RAM recommended
-* Local or mounted Phi-3-Mini model
 
 ### Installation
 
@@ -119,9 +102,10 @@ Validates incoming prompts by checking:
 * Prompt injection patterns
 * Unsafe or harmful intentions
 
-### RAG Retriever
+### Intelligent Sollution:
 
-Retrieves semantically relevant context to ground the model's response.
+<img width="461" height="605" alt="Screenshot 2026-03-29 at 9 18 49 PM" src="https://github.com/user-attachments/assets/1ee2f367-769b-491d-b3d8-7a554c7b412a" />
+
 
 ### Output Guardrail
 
