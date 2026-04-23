@@ -96,6 +96,7 @@ class GuardrailConfig:
     rag_k_wiki: int = 3
     max_context_chars: int = 8000
     rag_chunk_size: int = 600   # NEW: chunk docs before embedding for better precision
+    rag_max_chunks: int = 0     # 0 = no limit; set >0 to cap chunks (faster startup)
 
     # Ollama model key
     ollama_model_name: str = "qwen2.5"
@@ -542,11 +543,13 @@ class RAGRetriever:
         path: Optional[str],
         embedding_model: SentenceTransformer,
         chunk_size: int = 600,
+        max_chunks: int = 0,
     ):
         self.name = name
         self.path = path
         self.embedding_model = embedding_model
         self.chunk_size = chunk_size
+        self._max_chunks = max_chunks
         self.knowledge_base: List[str] = []
         self.embeddings: Optional[torch.Tensor] = None
 
@@ -612,6 +615,10 @@ class RAGRetriever:
 
         kb = self._pick_texts_from_df(df)
         self.knowledge_base = [t for t in kb if isinstance(t, str) and t.strip()]
+
+        cap = getattr(self, "_max_chunks", 0)
+        if cap and cap > 0:
+            self.knowledge_base = self.knowledge_base[:cap]
 
         print(f"Loaded {len(self.knowledge_base)} RAG chunks ({self.name}) after chunking")
 
@@ -1092,6 +1099,7 @@ class GuardrailSystem:
             RAGRetriever(
                 "primary", config.rag_dataset_path,
                 shared_embedding_model, config.rag_chunk_size,
+                max_chunks=config.rag_max_chunks,
             )
             if config.enable_rag and config.rag_dataset_path else None
         )
@@ -1100,6 +1108,7 @@ class GuardrailSystem:
             RAGRetriever(
                 "wiki", config.wiki_rag_dataset_path,
                 shared_embedding_model, config.rag_chunk_size,
+                max_chunks=config.rag_max_chunks,
             )
             if config.enable_rag and config.wiki_rag_dataset_path else None
         )

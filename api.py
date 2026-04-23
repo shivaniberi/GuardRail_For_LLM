@@ -60,6 +60,7 @@ async def lifespan(app: FastAPI):
         context_relevance_threshold=0.35,
         ollama_model_name="qwen0.5",
         always_return_raw_llm=False,
+        rag_max_chunks=int(os.getenv("RAG_MAX_CHUNKS", "2000")),
     )
     _system = GuardrailSystem(config)
     yield
