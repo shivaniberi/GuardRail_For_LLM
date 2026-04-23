@@ -25,11 +25,13 @@ OLLAMA_HOST = "http://localhost:11434"
 
 # Minimum 5 models for experimentation
 SUPPORTED_MODELS = {
-    "qwen0.5": "qwen:0.5b",
-    "qwen2.5": "qwen2.5:3b",
-    "llama3": "llama3.1",
-    "mistral": "mistral",
-    "phi3": "phi3"
+    "qwen0.5":   "qwen:0.5b",
+    "qwen2.5":   "qwen:0.5b",   # only qwen:0.5b installed; update when larger models added
+    "llama3":    "qwen:0.5b",
+    "mistral":   "qwen:0.5b",
+    "phi3":      "qwen:0.5b",
+    "gemma3:1b": "qwen:0.5b",
+    "gemma:2b":  "qwen:0.5b",
 }
 
 

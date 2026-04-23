@@ -97,7 +97,7 @@ def _run_guardrail(req: PromptRequest):
     if req.model not in SUPPORTED_MODELS:
         raise HTTPException(status_code=400, detail=f"Unsupported model '{req.model}'. Choose from: {SUPPORTED_MODELS}")
 
-    _system.config.ollama_model_name = MODEL_MAP.get(req.model, "qwen:0.5b")
+    _system.config.ollama_model_name = req.model  # key expected by ollama_client.py
     result = _system.generate_with_guardrails(
         prompt=req.prompt,
         max_new_tokens=req.max_tokens,
