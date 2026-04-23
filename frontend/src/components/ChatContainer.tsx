@@ -725,7 +725,7 @@ export function ChatContainer() {
                       {[1, 2, 3].map(n => <option key={n} value={n}>{n}</option>)}
                     </select>
                   </div>
-                  
+                  <span className={`text-xs ${dk ? 'text-yellow-400' : 'text-amber-600'}`}>⚠ ~{numAgents * rounds * 1 + 2}min</span>
                 </>
               )}
             </div>
