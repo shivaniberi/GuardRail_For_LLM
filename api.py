@@ -35,12 +35,11 @@ async def lifespan(app: FastAPI):
         enable_logging=True,
         rag_dataset_path=os.getenv(
             "RAG_DATASET_PATH",
-            "s3://guardrail-group-bucket/processed/train.parquet",
+            "s3://guardraildemo/data/dolly_clean_final.parquet",
         ),
         wiki_rag_dataset_path=os.getenv(
             "WIKI_RAG_DATASET_PATH",
-            "s3://guardrail-group-bucket/knowledge_base/wikipedia/"
-            "2026/02/18/233610/simplewiki_articles.parquet",
+            "s3://guardraildemo/RAG/nli_fact_checking.parquet",
         ),
         ml_guardrail_model_path=os.path.join(_CORE, "input_safety_all7.joblib"),
         ml_guardrail_threshold=0.5,
