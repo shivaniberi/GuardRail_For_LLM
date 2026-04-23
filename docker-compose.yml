@@ -8,10 +8,5 @@ services:
     restart: always
     ports:
       - '8000:8000'
-      - '11434:11434'
     env_file: .env
-    volumes:
-      - ollama-data:/root/.ollama   # Ollama model weights persist across restarts
-
-volumes:
-  ollama-data:
+    network_mode: host
