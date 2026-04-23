@@ -1,0 +1,33 @@
+name: Deploy GuardRail LLM
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend to EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: SSH to EC2 and Redeploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/GuardRail_For_LLM
+            git pull origin main
+            docker-compose build --no-cache
+            docker-compose up -d
+            echo "Backend deployed successfully"
+
+  deploy-frontend:
+    name: Frontend (auto-handled by Amplify)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Amplify watches GitHub directly
+        run: echo "Amplify auto-rebuilds on push — no action needed here"

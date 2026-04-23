@@ -1,0 +1,22 @@
+# Core ML / NLP
+torch
+transformers
+sentence-transformers
+scikit-learn
+joblib
+numpy
+pandas
+pyarrow
+
+# API server
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+
+# AWS / S3 access
+boto3
+s3fs
+
+# HTTP client (for Ollama)
+requests

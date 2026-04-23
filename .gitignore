@@ -1,7 +1,25 @@
+# Secrets — never commit
+.env
 
+# Python
 __pycache__/
 *.pyc
-.DS_Store
-eval_outputs/
+*.pyo
+.Python
+
+# Large model artifacts — stored in S3, not git
 *.pt
 *.joblib
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Evaluation outputs
+eval_outputs/
+
+# Node / Frontend
+node_modules/
+dist/
+build/
