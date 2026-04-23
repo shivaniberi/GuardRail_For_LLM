@@ -1454,16 +1454,24 @@ class GuardrailSystem:
 
                     else:
                         # KB relevant, no named entity in response.
-                        # Try to extract KB's best answer for this topic.
-                        kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
-                        kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                            prompt, kb_sentence, context
-                        )
-                        if kb_on_topic:
-                            result["final_response"] = kb_sentence
-                            factual_flags["factual_verdict"] = "kb_filled_gap"
+                        # Trust short LLM answers (< 6 words) — they're likely correct
+                        # direct factual answers (e.g. "Paris") that don't need KB override.
+                        raw_word_count = len(raw_response.split())
+                        if raw_word_count < 6:
+                            factual_flags["factual_verdict"] = "raw_llm_short_trusted"
                         else:
-                            factual_flags["factual_verdict"] = "raw_llm_unverified"
+                            # Try to extract KB's best answer for this topic.
+                            # Use only the kb_sentence (not full context) for topic matching
+                            # to prevent cross-chunk contamination (e.g. France vs China).
+                            kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
+                            kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
+                                prompt, kb_sentence, ""
+                            )
+                            if kb_on_topic:
+                                result["final_response"] = kb_sentence
+                                factual_flags["factual_verdict"] = "kb_filled_gap"
+                            else:
+                                factual_flags["factual_verdict"] = "raw_llm_unverified"
             else:
                 factual_flags["factual_verdict"] = (
                     "kb_irrelevant" if skip_reason == "context_irrelevant" else "no_kb"
