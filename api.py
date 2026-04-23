@@ -155,12 +155,18 @@ async def api_multi_agent(req: MultiAgentRequest):
     _debate_busy = True
     try:
         from core.multi_agent import run_debate_sync
-        result = run_debate_sync(
-            guardrail_system=_system,
-            question=req.prompt,
-            num_agents=req.num_agents,
-            rounds=req.rounds,
-            model_name=req.model,
+        import asyncio, functools
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            functools.partial(
+                run_debate_sync,
+                guardrail_system=_system,
+                question=req.prompt,
+                num_agents=req.num_agents,
+                rounds=req.rounds,
+                model_name=req.model,
+            ),
         )
         return result
     finally:
