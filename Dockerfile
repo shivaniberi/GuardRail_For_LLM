@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # System deps
 RUN apt-get update && apt-get install -y \
-    curl wget git build-essential \
+    curl wget git build-essential zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Ollama inside the container
