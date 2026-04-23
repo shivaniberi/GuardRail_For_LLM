@@ -21,7 +21,18 @@ from core.multi_agent import ChainOfDebateOrchestrator
 
 _CORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core")
 
-SUPPORTED_MODELS = ["qwen0.5", "qwen2.5", "llama3", "mistral", "phi3"]
+SUPPORTED_MODELS = ["qwen0.5", "qwen2.5", "llama3", "mistral", "phi3", "gemma3:1b", "gemma:2b"]
+
+# Map frontend model keys to installed Ollama model names
+MODEL_MAP = {
+    "qwen0.5":   "qwen:0.5b",
+    "qwen2.5":   "qwen:0.5b",   # fallback until qwen2.5 is installed
+    "llama3":    "qwen:0.5b",
+    "mistral":   "qwen:0.5b",
+    "phi3":      "qwen:0.5b",
+    "gemma3:1b": "qwen:0.5b",
+    "gemma:2b":  "qwen:0.5b",
+}
 
 _system: GuardrailSystem | None = None
 _debate_busy = False
@@ -41,7 +52,7 @@ async def lifespan(app: FastAPI):
         ),
         wiki_rag_dataset_path=os.getenv(
             "WIKI_RAG_DATASET_PATH",
-            "s3://guardraildemo/RAG/nli_fact_checking.parquet",
+            "",  # disabled by default — 206MB file makes startup too slow
         ),
         ml_guardrail_model_path=os.path.join(_CORE, "input_safety_all7.joblib"),
         ml_guardrail_threshold=0.5,
@@ -85,7 +96,7 @@ def _run_guardrail(req: PromptRequest):
     if req.model not in SUPPORTED_MODELS:
         raise HTTPException(status_code=400, detail=f"Unsupported model '{req.model}'. Choose from: {SUPPORTED_MODELS}")
 
-    _system.config.ollama_model_name = req.model
+    _system.config.ollama_model_name = MODEL_MAP.get(req.model, "qwen:0.5b")
     result = _system.generate_with_guardrails(
         prompt=req.prompt,
         max_new_tokens=req.max_tokens,
