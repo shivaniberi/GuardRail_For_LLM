@@ -72,6 +72,7 @@ function cleanResponse(text: string): string {
 }
 
 const MODEL_OPTIONS = [
+  { key: 'qwen0.5',   label: 'Qwen 0.5b' },
   { key: 'gemma3:1b', label: 'Gemma 3'  },
   { key: 'gemma:2b',  label: 'Gemma'    },
   { key: 'phi3',      label: 'Phi-3'    },
@@ -463,7 +464,7 @@ export function ChatContainer() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const [model, setModel] = useState<string>('gemma3:1b');
+  const [model, setModel] = useState<string>('qwen0.5');
   const [mode, setMode] = useState<'single' | 'multi'>('single');
   const [numAgents, setNumAgents] = useState(3);
   const [rounds, setRounds] = useState(2);
