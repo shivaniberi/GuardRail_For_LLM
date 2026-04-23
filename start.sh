@@ -6,11 +6,7 @@ ollama serve &
 sleep 8
 
 echo ">>> Pulling LLM models (skips if already downloaded)..."
-ollama pull qwen2.5
 ollama pull qwen:0.5b
-ollama pull llama3
-ollama pull mistral
-ollama pull phi3
 
 echo ">>> Downloading latest artifacts from S3..."
 aws s3 cp s3://$S3_BUCKET/embeddings/ ./core/ --recursive
