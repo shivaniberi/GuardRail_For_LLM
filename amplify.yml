@@ -4,10 +4,10 @@ frontend:
     preBuild:
       commands:
         - nvm install 18 && nvm use 18
-        - cd frontend && npm ci
+        - npm ci --prefix frontend
     build:
       commands:
-        - cd frontend && npm run build
+        - npm run build --prefix frontend
   artifacts:
     baseDirectory: frontend/dist
     files:
