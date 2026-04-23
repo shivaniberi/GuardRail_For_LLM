@@ -830,6 +830,17 @@ def _kb_sentence_matches_query_topic(
     # Check both the extracted sentence and its source context
     search_text = (kb_sentence + " " + (context or "")).lower()
     matches = sum(1 for t in expanded_topics if t in search_text)
+
+    # Proper nouns (capitalized in the original query) must appear in the KB text.
+    # e.g. "France" must be in the chunk — prevents China chunks answering France questions.
+    proper_nouns = set(
+        w.lower() for w in re.findall(r'\b[A-Z][a-z]{2,}\b', query)
+        if w.lower() not in TOPIC_STOP
+    )
+    if proper_nouns:
+        proper_match = sum(1 for t in proper_nouns if t in search_text)
+        return proper_match >= 1
+
     return matches >= 1
 
 
