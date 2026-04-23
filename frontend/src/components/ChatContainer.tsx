@@ -466,8 +466,8 @@ export function ChatContainer() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [model, setModel] = useState<string>('qwen0.5');
   const [mode, setMode] = useState<'single' | 'multi'>('single');
-  const [numAgents, setNumAgents] = useState(3);
-  const [rounds, setRounds] = useState(2);
+  const [numAgents, setNumAgents] = useState(2);
+  const [rounds, setRounds] = useState(1);
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     (localStorage.getItem('gr_theme') as 'dark' | 'light') || 'dark'
   );
