@@ -58,7 +58,8 @@ jobs:
           command_timeout: 10m
           script: |
             cd ~/GuardRail_For_LLM/GuardRail_For_LLM
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
 
             CHANGED=$(git diff HEAD~1 --name-only 2>/dev/null || echo "requirements.txt")
             if echo "$CHANGED" | grep -qE "requirements.txt|Dockerfile|start.sh"; then
@@ -73,7 +74,7 @@ jobs:
             docker run -d --name guardrail --network host --env-file .env guardrail-backend:latest
 
             echo ">>> Waiting for server to be healthy..."
-            for i in $(seq 1 18); do
+            for i in $(seq 1 30); do
               if curl -sf http://localhost:8000/health | grep -q "true"; then
                 echo ">>> Health check passed!"
                 exit 0
