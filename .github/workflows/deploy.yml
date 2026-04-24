@@ -19,10 +19,12 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            cd ~/GuardRail_For_LLM
+            cd ~/GuardRail_For_LLM/GuardRail_For_LLM
             git pull origin main
-            docker-compose build --no-cache
-            docker-compose up -d
+            docker stop guardrail 2>/dev/null || true
+            docker rm guardrail 2>/dev/null || true
+            docker build -t guardrail-backend:latest .
+            docker run -d --name guardrail --network host --env-file .env guardrail-backend:latest
             echo "Backend deployed successfully"
 
   deploy-frontend:
