@@ -5,31 +5,90 @@ on:
     branches: [main]
 
 jobs:
+  check-frontend:
+    name: Frontend Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefix frontend
+
+      - name: Type check and build
+        run: npm run build --prefix frontend
+
+  check-backend:
+    name: Backend Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install core dependencies
+        run: pip install fastapi pydantic uvicorn requests
+
+      - name: Syntax check all Python files
+        run: find . -name "*.py" -not -path "*/node_modules/*" | xargs python -m py_compile && echo "All Python files OK"
+
+      - name: Check api.py structure
+        run: python -c "import ast; ast.parse(open('api.py').read()); print('api.py syntax OK')"
+
   deploy-backend:
     name: Deploy Backend to EC2
     runs-on: ubuntu-latest
+    needs: [check-frontend, check-backend]
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
       - name: SSH to EC2 and Redeploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 10m
           script: |
             cd ~/GuardRail_For_LLM/GuardRail_For_LLM
             git pull origin main
+
+            CHANGED=$(git diff HEAD~1 --name-only 2>/dev/null || echo "requirements.txt")
+            if echo "$CHANGED" | grep -qE "requirements.txt|Dockerfile|start.sh"; then
+              echo ">>> Dependencies changed — rebuilding image..."
+              docker build -t guardrail-backend:latest .
+            else
+              echo ">>> No dependency changes — fast deploy (no rebuild)"
+            fi
+
             docker stop guardrail 2>/dev/null || true
             docker rm guardrail 2>/dev/null || true
-            docker build -t guardrail-backend:latest .
             docker run -d --name guardrail --network host --env-file .env guardrail-backend:latest
-            echo "Backend deployed successfully"
+
+            echo ">>> Waiting for server to be healthy..."
+            for i in $(seq 1 18); do
+              if curl -sf http://localhost:8000/health | grep -q "true"; then
+                echo ">>> Health check passed!"
+                exit 0
+              fi
+              echo "Attempt $i/18 — waiting 10s..."
+              sleep 10
+            done
+            echo ">>> ERROR: Server did not become healthy in time"
+            docker logs guardrail --tail 20
+            exit 1
 
   deploy-frontend:
     name: Frontend (auto-handled by Amplify)
     runs-on: ubuntu-latest
+    needs: [check-frontend, check-backend]
     steps:
       - name: Amplify watches GitHub directly
         run: echo "Amplify auto-rebuilds on push — no action needed here"
