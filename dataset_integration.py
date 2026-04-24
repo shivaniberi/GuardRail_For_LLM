@@ -21,7 +21,8 @@ class GuardrailDatasetLoader:
     Loads and manages all datasets for guardrail evaluation
     """
 
-        
+    def __init__(self):
+        self.datasets = {}
         # Dataset mappings
         self.dataset_info = {
             'truthful_qa': {
