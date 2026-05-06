@@ -1,3 +1,4 @@
+import asyncio
 """
 Interactive runner for the Chain-of-Debate multi-agent orchestrator.
 
@@ -642,12 +643,12 @@ def main():
     orchestrator = ChainOfDebateOrchestrator(gs)
 
     print(f"Running debate with {num_agents} proponents and {rounds} rebuttal rounds...")
-    record = orchestrator.debate(
+    record = asyncio.run(orchestrator.debate(
         query,
         num_agents=num_agents,
         rounds=rounds,
         model_name=cfg.ollama_model_name,
-    )
+    ))
 
     # Normalize judge
     record = extract_json_or_repair(record, cfg.ollama_model_name)

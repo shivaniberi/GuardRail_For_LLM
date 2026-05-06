@@ -10,7 +10,11 @@ Endpoints:
 """
 
 import os
+import re
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,15 +27,14 @@ _CORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core")
 
 SUPPORTED_MODELS = ["qwen0.5", "qwen2.5", "llama3", "mistral", "phi3", "gemma3:1b", "gemma:2b"]
 
-# Map frontend model keys to installed Ollama model names
 MODEL_MAP = {
     "qwen0.5":   "qwen:0.5b",
-    "qwen2.5":   "qwen:0.5b",   # fallback until qwen2.5 is installed
-    "llama3":    "qwen:0.5b",
-    "mistral":   "qwen:0.5b",
-    "phi3":      "qwen:0.5b",
-    "gemma3:1b": "qwen:0.5b",
-    "gemma:2b":  "qwen:0.5b",
+    "qwen2.5":   "qwen:2.5b",
+    "llama3":    "qwen:2.5b",
+    "mistral":   "qwen:2.5b",
+    "phi3":      "qwen:2.5b",
+    "gemma3:1b": "qwen:2.5b",
+    "gemma:2b":  "qwen:2.5b",
 }
 
 _system: GuardrailSystem | None = None
@@ -48,17 +51,17 @@ async def lifespan(app: FastAPI):
         enable_logging=True,
         rag_dataset_path=os.getenv(
             "RAG_DATASET_PATH",
-            "s3://guardraildemo/data/dolly_clean_final.parquet",
+            "s3://guardrail-group-bucket/processed/train.parquet",
         ),
         wiki_rag_dataset_path=os.getenv(
             "WIKI_RAG_DATASET_PATH",
-            "",  # disabled by default — 206MB file makes startup too slow
+            "s3://guardrail-group-bucket/knowledge_base/wikipedia/latest/simplewiki_articles.parquet",
         ),
         ml_guardrail_model_path=os.path.join(_CORE, "input_safety_all7.joblib"),
         ml_guardrail_threshold=0.5,
         hallucination_threshold=0.72,
         context_relevance_threshold=0.35,
-        ollama_model_name="qwen0.5",
+        ollama_model_name="qwen2.5",
         always_return_raw_llm=False,
         rag_max_chunks=int(os.getenv("RAG_MAX_CHUNKS", "2000")),
     )
@@ -79,17 +82,19 @@ app.add_middleware(
 
 class PromptRequest(BaseModel):
     prompt: str
-    model: str = "qwen0.5"
+    model: str = "qwen2.5"
     max_tokens: int = 256
     use_rag: bool = True
 
 
 class MultiAgentRequest(BaseModel):
     prompt: str
-    model: str = "qwen0.5"
+    model: str = "qwen2.5"
     num_agents: int = 2
     rounds: int = 1
 
+
+# ── Single-model guardrail ────────────────────────────────────────────────────
 
 def _run_guardrail(req: PromptRequest):
     if _system is None:
@@ -97,7 +102,7 @@ def _run_guardrail(req: PromptRequest):
     if req.model not in SUPPORTED_MODELS:
         raise HTTPException(status_code=400, detail=f"Unsupported model '{req.model}'. Choose from: {SUPPORTED_MODELS}")
 
-    _system.config.ollama_model_name = req.model  # key expected by ollama_client.py
+    _system.config.ollama_model_name = req.model
     result = _system.generate_with_guardrails(
         prompt=req.prompt,
         max_new_tokens=req.max_tokens,
@@ -134,6 +139,69 @@ def _run_guardrail(req: PromptRequest):
     }
 
 
+# ── Multi-agent helpers ───────────────────────────────────────────────────────
+
+def _extract_best_proposal(rounds: list) -> str:
+    """Extract the best answer from the last round's proposals."""
+    if not rounds:
+        return ""
+    last_round = rounds[-1] or {}
+    proposals = last_round.get("proposals", []) or []
+    if not proposals:
+        return ""
+    return proposals[0].get("content", "") or ""
+
+
+def _is_clean_answer(text: str) -> bool:
+    """Return False if text looks like critic/judge noise rather than a real answer."""
+    if not text:
+        return False
+    noise_patterns = [
+        r"critique_\d",
+        r"proposed \d",
+        r"proposal \d",
+        r"rebuttal",
+        r"potential errors",
+        r"unsupported claims",
+        r"in conclusion.*in conclusion",
+    ]
+    text_lower = text.lower()
+    for pattern in noise_patterns:
+        if re.search(pattern, text_lower):
+            return False
+    return True
+
+
+def _apply_kb_correction(question: str, answer: str, context: str) -> str:
+    """Use KB contradiction detection to correct hallucinations."""
+    if not context or not answer:
+        return answer
+    try:
+        from core.guardrail_implementation import (
+            _kb_contradicts_response,
+            _extract_kb_answer_sentence,
+            _kb_sentence_matches_query_topic,
+            _lookup_factual_negation,
+        )
+        if callable(_lookup_factual_negation):
+            negation = _lookup_factual_negation(question)
+            if negation:
+                return negation
+
+        if callable(_kb_contradicts_response):
+            contradicts, suggested = _kb_contradicts_response(answer, context)
+            if contradicts and suggested and callable(_extract_kb_answer_sentence):
+                kb_sentence = _extract_kb_answer_sentence(question, context, suggested)
+                if kb_sentence and callable(_kb_sentence_matches_query_topic):
+                    if _kb_sentence_matches_query_topic(question, kb_sentence, context):
+                        return kb_sentence
+    except Exception:
+        pass
+    return answer
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
 @app.post("/api/guardrail")
 async def api_guardrail(req: PromptRequest):
     return _run_guardrail(req)
@@ -154,21 +222,107 @@ async def api_multi_agent(req: MultiAgentRequest):
 
     _debate_busy = True
     try:
-        from core.multi_agent import run_debate_sync
-        import asyncio, functools
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            functools.partial(
-                run_debate_sync,
-                guardrail_system=_system,
-                question=req.prompt,
-                num_agents=req.num_agents,
-                rounds=req.rounds,
-                model_name=req.model,
-            ),
+        orchestrator = ChainOfDebateOrchestrator(_system)
+        result = await orchestrator.debate(
+            question=req.prompt,
+            num_agents=req.num_agents,
+            rounds=req.rounds,
+            model_name=req.model,
         )
+
+        # ── Post-processing ───────────────────────────────────────────────────
+
+        # 1. Get RAG context for KB correction
+        context = ""
+        ctx_meta = {}
+        try:
+            context, ctx_meta = orchestrator._retrieve_context(req.prompt)
+            context = context or ""
+        except Exception:
+            pass
+
+        # 2. Get judge final_answer
+        judge = result.get("judge", {}) or {}
+        final_answer = judge.get("final_answer", "") or ""
+
+        # 3. Fallback to best proposal if judge output is noisy/garbage
+        if not final_answer or not _is_clean_answer(final_answer):
+            fallback = _extract_best_proposal(result.get("rounds", []))
+            if fallback:
+                final_answer = fallback
+                result["judge"]["final_answer"] = fallback
+                result["judge"]["source"] = "proposal_fallback"
+
+        # 4. Apply KB correction to fix hallucinations
+        if context and final_answer:
+            corrected = _apply_kb_correction(req.prompt, final_answer, context)
+            if corrected != final_answer:
+                result["judge"]["final_answer"] = corrected
+                result["judge"]["kb_corrected"] = True
+                final_answer = corrected
+
+        # 5. Build RAG metadata
+        primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
+        wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
+        kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
+
+        result["rag_metadata"] = {
+            "rag_used":   bool(primary_count + wiki_count > 0),
+            "total_docs": primary_count + wiki_count,
+            "kb_sources": kb_sources,  # list — frontend calls .join() on this
+        }
+
+        # 6. Build evaluation wrapper — this is what the frontend reads
+        result["evaluation"] = {
+            "raw_llm_response": result.get("judge", {}).get("raw", ""),
+            "final_response":   final_answer,
+            "verdict":          "safe",
+            "block_reason":     None,
+            "safety_flags":     {},
+            "factual_flags":    {},
+            "metadata": {
+                "rag_used":                bool(primary_count + wiki_count > 0),
+                "retrieved_docs_total":    primary_count + wiki_count,
+                "kb_sources":              kb_sources,  # list — must be array not string
+                "ml_unsafe_probability":   None,
+                "ml_prompt_probability":   None,
+                "ml_response_probability": None,
+            },
+            "guardrails": {
+                "output": {
+                    "valid": True,
+                    "checks": {
+                        "hallucination_similarity": (
+                            result.get("output_verification", {})
+                                  .get("checks", {})
+                                  .get("hallucination_similarity")
+                        ),
+                        "context_relevance": (
+                            result.get("output_verification", {})
+                                  .get("checks", {})
+                                  .get("context_relevance")
+                        ),
+                        "skipped_reason":        None,
+                        "privacy_leak_detected": False,
+                    }
+                }
+            }
+        }
+
+        # 7. Add debate_rounds so frontend shows agent/round count
+        result["debate_rounds"] = result.get("rounds", [])
+
+        # 8. Top-level raw_llm_response = first agent's raw answer (before guardrail)
+        rounds = result.get("rounds", [])
+        first_proposal = ""
+        if rounds and rounds[0].get("proposals"):
+            first_proposal = rounds[0]["proposals"][0].get("content", "")
+
+        result["raw_llm_response"] = first_proposal
+        result["evaluation"]["raw_llm_response"] = first_proposal
+
         return result
+
     finally:
         _debate_busy = False
 

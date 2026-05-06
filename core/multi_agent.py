@@ -33,6 +33,7 @@ Notes:
 
 import asyncio
 import json
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -50,11 +51,9 @@ def _extract_json_from_text(text: str) -> dict:
     cleaned = text.strip()
     # Remove surrounding ``` fences if present
     if cleaned.startswith("```") and cleaned.endswith("```"):
-        # remove fence markers and any leading 'json' label
         parts = cleaned.split("```")
         cleaned = " ".join(p for p in parts if p.strip() and not p.strip().lower().startswith("json"))
     # Try to find a JSON object in the cleaned text
-    import re
     m = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if not m:
         return None
@@ -82,12 +81,13 @@ class AgentBase:
         if context:
             prompt = f"Context:\n{context}\n\n{instruction}"
 
-        loop = asyncio.get_event_loop()
-        model = kwargs.get("model_name") or "phi3"
+        # FIX: use get_running_loop() instead of get_event_loop() to work inside FastAPI
+        loop = asyncio.get_running_loop()
+        # FIX: default model changed from phi3 to qwen0.5
+        model = kwargs.get("model_name") or "qwen0.5"
         timeout = kwargs.get("timeout", 120)
 
         try:
-            # Run blocking ollama_generate in a thread with an overall timeout
             content = await asyncio.wait_for(
                 loop.run_in_executor(
                     None,
@@ -105,7 +105,6 @@ class AgentBase:
 
 class LLMAgent(AgentBase):
     """Generic LLM-backed specialist agent. Currently thin wrapper around AgentBase."""
-
     pass
 
 
@@ -128,7 +127,7 @@ class ChainOfDebateOrchestrator:
         self.gs = guardrail_system
 
     def _build_agent_prompts(self, role: str) -> List[str]:
-        """Return system prompts for agents depending on role. Simple deterministic set for MVP."""
+        """Return system prompts for agents depending on role."""
         if role == "proponent":
             return [
                 "You are an advocate. Provide a concise answer and supporting reasons, and cite any assumptions.",
@@ -142,9 +141,8 @@ class ChainOfDebateOrchestrator:
             ]
         if role == "judge":
             return [
-                "You are an impartial judge. Given multiple proposals and rebuttals, pick the most supported answer, explain why, and cite any remaining uncertainties. Output JSON: {\"final_answer\":..., \"rationale\":..., \"confidence\":0-1}" ,
+                "You are an impartial judge. Given multiple proposals and rebuttals, pick the most supported answer, explain why, and cite any remaining uncertainties. Output JSON: {\"final_answer\":..., \"rationale\":..., \"confidence\":0-1}",
             ]
-        # Fallback
         return ["You are a helpful assistant. Answer succinctly."]
 
     async def _call_agents(self, agents: List[AgentBase], instruction: str, context: Optional[str] = None, model_name: Optional[str] = None) -> List[Dict]:
@@ -153,9 +151,7 @@ class ChainOfDebateOrchestrator:
         return results
 
     def _retrieve_context(self, query: str) -> Tuple[Optional[str], Dict[str, Any]]:
-        """Use GuardrailSystem's retrievers to produce context and metadata.
-        Returns (context_text or None, metadata)
-        """
+        """Use GuardrailSystem's retrievers to produce context and metadata."""
         try:
             primary_docs, wiki_docs = self.gs._retrieve_from_both_kbs(query)
             all_docs = []
@@ -173,7 +169,8 @@ class ChainOfDebateOrchestrator:
         except Exception as e:
             return None, {"error": str(e)}
 
-    def debate(self, question: str, num_agents: int = 3, rounds: int = 2, model_name: str = "phi3") -> Dict:
+    # FIX: debate() is now async to work properly inside FastAPI's event loop
+    async def debate(self, question: str, num_agents: int = 3, rounds: int = 2, model_name: str = "qwen0.5") -> Dict:
         """
         Run a chain-of-debate on `question`.
 
@@ -202,60 +199,51 @@ class ChainOfDebateOrchestrator:
             prompt = proponent_prompts[i % len(proponent_prompts)]
             proponents.append(LLMAgent(agent_id=f"proponent_{i+1}", system_prompt=prompt))
 
-        # STEP 3 — Initial proposals
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            proposals = loop.run_until_complete(self._call_agents(proponents, f"Question: {question}\nProvide answer and reasoning.", context=context, model_name=model_name))
-        finally:
-            # keep loop for subsequent async calls inside this method
-            pass
+        # STEP 3 — Initial proposals (FIX: await directly, no new event loop)
+        proposals = await self._call_agents(
+            proponents,
+            f"Question: {question}\nProvide answer and reasoning.",
+            context=context,
+            model_name=model_name,
+        )
 
         rounds_data: List[Dict] = []
-
-        # store current statements for context-sharing between rounds
         current_statements = [p["content"] for p in proposals]
 
-        # iterate rounds of rebuttal
+        # STEP 4 — Rounds of rebuttal
         for r in range(rounds):
-            # build critics (we can reuse the same number as proponents or fewer)
             critic_prompts = self._build_agent_prompts("critic")
             critics: List[AgentBase] = []
             for i in range(num_agents):
                 prom = critic_prompts[i % len(critic_prompts)]
                 critics.append(LLMAgent(agent_id=f"critic_{r+1}_{i+1}", system_prompt=prom))
 
-            # critics critique all current statements; compose a shared instruction
             instruction = "Given the following proposals, provide concise critiques for each.\n\n"
             for idx, stmt in enumerate(current_statements, start=1):
                 instruction += f"Proposal {idx}: {stmt}\n\n"
             instruction += "For each proposal, list up to 2 potential errors, unsupported claims, or required evidence. Be concise."
 
-            rebuttals = loop.run_until_complete(self._call_agents(critics, instruction, context=context, model_name=model_name))
+            rebuttals = await self._call_agents(critics, instruction, context=context, model_name=model_name)
 
-            # Append round data
             rounds_data.append({
                 "round": r + 1,
                 "proposals": proposals,
                 "rebuttals": rebuttals,
             })
 
-            # Update current_statements by appending short syntheses from proponents
             synth_instruction = "Review the rebuttals below and revise/defend your original short answer in 1-2 sentences.\n\n"
             synth_instruction += "Rebuttals:\n"
             for rb in rebuttals:
                 synth_instruction += f"- {rb['agent_id']}: {rb['content']}\n"
 
-            proponents_defend = loop.run_until_complete(self._call_agents(proponents, synth_instruction, context=context, model_name=model_name))
-            # new proposals for next round are the defenses
+            proponents_defend = await self._call_agents(proponents, synth_instruction, context=context, model_name=model_name)
             proposals = proponents_defend
             current_statements = [p["content"] for p in proposals]
 
-        # Final judge
+        # STEP 5 — Judge
         judge_prompt = self._build_agent_prompts("judge")[0]
         judge_agent = LLMAgent(agent_id="judge", system_prompt=judge_prompt)
 
-        # Build judge instruction including proposals and rebuttals
         judge_instruction = "You are the judge. Review the following proposals and rebuttals and produce a final answer. Output strict JSON with keys: final_answer, rationale, confidence (0-1).\n\n"
         judge_instruction += "Proposals:\n"
         for idx, p in enumerate(proposals, start=1):
@@ -265,28 +253,22 @@ class ChainOfDebateOrchestrator:
             for rb in rd["rebuttals"]:
                 judge_instruction += f"{rb['agent_id']}: {rb['content']}\n"
 
-        # call judge (sync via event loop)
-        judge_result = loop.run_until_complete(judge_agent.run(judge_instruction, context=context, model_name=model_name))
+        judge_result = await judge_agent.run(judge_instruction, context=context, model_name=model_name)
 
-        # Try to parse judge JSON (judge was instructed to output JSON)
         final_answer = judge_result.get("content", "")
         parsed_judge = {"raw": final_answer}
 
-        # Attempt to robustly extract JSON even if wrapped in markdown/code fences
         extracted = _extract_json_from_text(final_answer)
         if extracted:
             parsed_judge = {**parsed_judge, **extracted}
         else:
-            # best effort: put raw content in rationale if parse fails
             parsed_judge["parse_error"] = True
             parsed_judge["rationale_fallback"] = final_answer
 
-        # If judge selected a proposal reference like "Proposal 3", replace final_answer
+        # If judge referenced a proposal by number, resolve it
         try:
-            import re
             candidate = (parsed_judge.get("final_answer") or parsed_judge.get("raw", ""))
             if isinstance(candidate, str):
-                # Exact match like: "Proposal 3"
                 m = re.match(r"^\s*proposal\s*(\d+)\s*$", candidate.strip(), re.IGNORECASE)
                 if m:
                     idx = int(m.group(1))
@@ -295,7 +277,6 @@ class ChainOfDebateOrchestrator:
                         parsed_judge["chosen_proposal"] = {"index": idx, "agent_id": proposals[idx - 1].get("agent_id")}
                         parsed_judge["final_answer"] = chosen
                 else:
-                    # Search anywhere in raw text for a proposal reference
                     m2 = re.search(r"proposal\s*(\d+)", parsed_judge.get("raw", ""), re.IGNORECASE)
                     if m2:
                         idx = int(m2.group(1))
@@ -306,10 +287,14 @@ class ChainOfDebateOrchestrator:
         except Exception:
             pass
 
-        # Final guardrail verification (factual + privacy)
-        output_verification = self.gs.output_guardrail.verify(query=question, response=parsed_judge.get("final_answer", parsed_judge.get("raw", "")), context=context)
+        # STEP 6 — Output guardrail verification
+        output_verification = self.gs.output_guardrail.verify(
+            query=question,
+            response=parsed_judge.get("final_answer", parsed_judge.get("raw", "")),
+            context=context,
+        )
 
-        final_record = {
+        return {
             "question": question,
             "input_validation": ig_result,
             "context_metadata": ctx_meta,
@@ -319,28 +304,19 @@ class ChainOfDebateOrchestrator:
             "output_verification": output_verification,
         }
 
-        # Close the loop we created
-        try:
-            loop.close()
-        except Exception:
-            pass
 
-        return final_record
-
-
-# Optional: small helper to make orchestrator usage simpler in interactive scripts
-def run_debate_sync(guardrail_system: GuardrailSystem, question: str, num_agents: int = 3, rounds: int = 2, model_name: str = "phi3") -> Dict:
+# FIX: run_debate_sync now uses asyncio.run() since debate() is now async
+def run_debate_sync(guardrail_system: GuardrailSystem, question: str, num_agents: int = 3, rounds: int = 2, model_name: str = "qwen0.5") -> Dict:
     orchestrator = ChainOfDebateOrchestrator(guardrail_system)
-    return orchestrator.debate(question, num_agents=num_agents, rounds=rounds, model_name=model_name)
+    return asyncio.run(orchestrator.debate(question, num_agents=num_agents, rounds=rounds, model_name=model_name))
 
 
 if __name__ == "__main__":
-    # Minimal demo (note: constructing GuardrailSystem will load embeddings and may be slow)
     print("Chain-of-Debate multi-agent orchestrator demo. This will initialize GuardrailSystem (may be slow).")
     cfg = GuardrailConfig()
     gs = GuardrailSystem(cfg)
     orchestrator = ChainOfDebateOrchestrator(gs)
     q = "Who is the current CEO of Google?"
     print("Running debate for question:", q)
-    res = orchestrator.debate(q, num_agents=2, rounds=1)
+    res = asyncio.run(orchestrator.debate(q, num_agents=2, rounds=1))
     print(json.dumps(res, indent=2))

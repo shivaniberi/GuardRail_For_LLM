@@ -88,7 +88,7 @@ class GuardrailConfig:
 
     rag_dataset_path: str = "s3://guardrail-group-bucket/processed/train.parquet"
     wiki_rag_dataset_path: str = (
-        "s3://guardrail-group-bucket/knowledge_base/wikipedia/2026/02/18/233610/simplewiki_articles.parquet"
+        "s3://guardrail-group-bucket/knowledge_base/wikipedia/latest/simplewiki_articles.parquet"
     )
 
     # Retrieval knobs
@@ -1062,7 +1062,7 @@ def _extract_kb_answer_sentence(
                 best = sent.strip()
         if best and best_score > 0:
             best = re.sub(r'^###\s*(PRIMARY_KB|WIKIPEDIA_KB)\s*', '', best).strip()
-            return f"According to my knowledge base: {best}"
+            return f"{best}"
 
     # ── Pass 2: topic-only (no entity requirement) ────────────────────────────
     best, best_score = "", 0.0
@@ -1074,7 +1074,7 @@ def _extract_kb_answer_sentence(
     # Require score >= 2 so we don't return a random unrelated sentence
     if best and best_score >= 2:
         best = re.sub(r'^###\s*(PRIMARY_KB|WIKIPEDIA_KB)\s*', '', best).strip()
-        return f"According to my knowledge base: {best}"
+        return f"{best}"
 
     return ""
 
