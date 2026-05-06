@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
+const API_BASE = 'http://localhost:8000';
 
 // Strip markdown formatting for display in UI panels
 function stripMarkdown(text: string): string {
@@ -72,7 +72,6 @@ function cleanResponse(text: string): string {
 }
 
 const MODEL_OPTIONS = [
-  { key: 'qwen0.5',   label: 'Qwen 0.5b' },
   { key: 'gemma3:1b', label: 'Gemma 3'  },
   { key: 'gemma:2b',  label: 'Gemma'    },
   { key: 'phi3',      label: 'Phi-3'    },
@@ -146,7 +145,7 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
         </span>
       </div>
 
-      <div className="p-4 grid grid-cols-2 gap-4">
+      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className={`p-3 rounded-lg ${card}`}>
           <h3 className={`text-xs font-semibold uppercase tracking-widest mb-2 ${cardTitle}`}>Raw LLM Response</h3>
           <div className={`text-xs leading-relaxed whitespace-pre-wrap overflow-y-auto ${cardText}`} style={{ maxHeight: '220px' }}>
@@ -166,7 +165,7 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
         </div>
       </div>
 
-      <div className="px-4 pb-4 grid grid-cols-2 gap-4">
+      <div className="px-4 pb-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className={`p-3 rounded-lg ${card}`}>
           <h3 className={`text-xs font-semibold uppercase tracking-widest mb-3 ${cardTitle}`}>Safety Checks</h3>
           <div className="grid grid-cols-2 gap-2">
@@ -296,7 +295,7 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
       </div>
 
       {/* Top row: Raw LLM + Guarded Response */}
-      <div className="p-4 pb-0 grid grid-cols-2 gap-4">
+      <div className="p-4 pb-0 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className={`p-3 rounded-lg border ${card}`}>
           <h3 className={`text-xs font-semibold uppercase tracking-widest mb-2 ${cardTitle}`}>Raw LLM Response</h3>
           <div className={`text-xs leading-relaxed whitespace-pre-wrap overflow-y-auto ${cardText}`} style={{ maxHeight: '220px' }}>
@@ -312,7 +311,7 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
       </div>
 
       {/* Bottom row: Safety Checks left, ML/Output/RAG right */}
-      <div className="px-4 pb-4 pt-4 grid grid-cols-2 gap-4">
+      <div className="px-4 pb-4 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
 
         {/* Left — Safety Checks */}
         <div className={`p-3 rounded-lg border ${card}`}>
@@ -461,13 +460,14 @@ function ChatBubble({ msg, theme }: { msg: Message; theme: 'dark' | 'light' }) {
 // ── Main container ────────────────────────────────────────────────────────────
 export function ChatContainer() {
   const [prompt, setPrompt] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const [model, setModel] = useState<string>('qwen0.5');
+  const [model, setModel] = useState<string>('gemma3:1b');
   const [mode, setMode] = useState<'single' | 'multi'>('single');
-  const [numAgents, setNumAgents] = useState(2);
-  const [rounds, setRounds] = useState(1);
+  const [numAgents, setNumAgents] = useState(3);
+  const [rounds, setRounds] = useState(2);
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     (localStorage.getItem('gr_theme') as 'dark' | 'light') || 'dark'
   );
@@ -609,21 +609,31 @@ export function ChatContainer() {
 
   return (
     <div className={`h-screen flex overflow-hidden ${pageBg}`}>
-      <Sidebar
-        conversations={conversations}
-        activeConversationId={activeConversationId}
-        onSelect={handleSelectConversation}
-        onNew={handleNewConversation}
-        onRename={handleRenameConversation}
-        onDelete={handleDeleteConversation}
-        theme={theme}
-      />
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+      <div className={`fixed md:relative z-50 md:z-auto h-screen transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+        <Sidebar
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelect={(id) => { handleSelectConversation(id); setSidebarOpen(false); }}
+          onNew={() => { handleNewConversation(); setSidebarOpen(false); }}
+          onRename={handleRenameConversation}
+          onDelete={handleDeleteConversation}
+          theme={theme}
+        />
+      </div>
 
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
 
         {/* Header */}
         <header className={`flex-shrink-0 flex items-center justify-between px-6 py-3 border-b ${dk ? 'bg-gray-900 border-gray-700' : 'bg-slate-100 border-slate-200'}`}>
           <div className="flex items-center gap-3">
+            <button className="md:hidden p-2 rounded-lg" onClick={() => setSidebarOpen(v => !v)}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+              </svg>
+            </button>
             <img
               src={dk ? '/logo-dark.png' : '/logo-light.png'}
               alt="GateKeeper Logo"
@@ -725,7 +735,7 @@ export function ChatContainer() {
                       {[1, 2, 3].map(n => <option key={n} value={n}>{n}</option>)}
                     </select>
                   </div>
-                  <span className={`text-xs ${dk ? 'text-yellow-400' : 'text-amber-600'}`}>⚠ ~{numAgents * rounds * 1 + 2}min</span>
+                  
                 </>
               )}
             </div>
