@@ -2,12 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
-<<<<<<< Updated upstream
-const API_BASE = 'http://localhost:8000';
-=======
 const API_BASE = import.meta.env.VITE_API_URL || 'https://0b8c-52-55-13-232.ngrok-free.app';
-
->>>>>>> Stashed changes
 
 // Strip markdown formatting for display in UI panels
 function stripMarkdown(text: string): string {
