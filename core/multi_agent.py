@@ -130,18 +130,17 @@ class ChainOfDebateOrchestrator:
         """Return system prompts for agents depending on role."""
         if role == "proponent":
             return [
-                "You are an advocate. Provide a concise answer and supporting reasons, and cite any assumptions.",
-                "You are an analytic proponent. Give a direct answer, then a short chain-of-thought style justification.",
-                "You are a careful explainer. State your final answer first, then provide the top 2 reasons in bullet points.",
+                "You are an advocate. Answer in 2 sentences max.",
+                "You are an analyst. Give a direct answer in 1-2 sentences.",
             ]
         if role == "critic":
             return [
-                "You are a critic. Identify possible errors, missing evidence, or hallucinations in the provided answers. Be brief and factual.",
-                "You are a skeptic. Provide counter-arguments and point out contradictions or unsupported claims.",
+                "You are a critic. In 1-2 sentences, identify the main flaw in the proposals.",
+                "You are a skeptic. In 1-2 sentences, give the strongest counter-argument.",
             ]
         if role == "judge":
             return [
-                "You are an impartial judge. Given multiple proposals and rebuttals, pick the most supported answer, explain why, and cite any remaining uncertainties. Output JSON: {\"final_answer\":..., \"rationale\":..., \"confidence\":0-1}",
+                'You are a judge. Pick the best answer and output JSON: {"final_answer":"...","rationale":"...","confidence":0.9}',
             ]
         return ["You are a helpful assistant. Answer succinctly."]
 
@@ -231,27 +230,26 @@ class ChainOfDebateOrchestrator:
                 "rebuttals": rebuttals,
             })
 
-            synth_instruction = "Review the rebuttals below and revise/defend your original short answer in 1-2 sentences.\n\n"
-            synth_instruction += "Rebuttals:\n"
-            for rb in rebuttals:
-                synth_instruction += f"- {rb['agent_id']}: {rb['content']}\n"
-
-            proponents_defend = await self._call_agents(proponents, synth_instruction, context=context, model_name=model_name)
-            proposals = proponents_defend
-            current_statements = [p["content"] for p in proposals]
+            if r < rounds - 1:
+                synth_instruction = "Revise your answer in 1-2 sentences based on the rebuttals.\n\nRebuttals:\n"
+                for rb in rebuttals:
+                    synth_instruction += f"- {rb['agent_id']}: {rb['content']}\n"
+                proponents_defend = await self._call_agents(proponents, synth_instruction, context=context, model_name=model_name)
+                proposals = proponents_defend
+                current_statements = [p["content"] for p in proposals]
 
         # STEP 5 — Judge
         judge_prompt = self._build_agent_prompts("judge")[0]
         judge_agent = LLMAgent(agent_id="judge", system_prompt=judge_prompt)
 
-        judge_instruction = "You are the judge. Review the following proposals and rebuttals and produce a final answer. Output strict JSON with keys: final_answer, rationale, confidence (0-1).\n\n"
+        judge_instruction = 'Pick the best proposal. Output JSON: {"final_answer":"...","rationale":"...","confidence":0.9}\n\n'
         judge_instruction += "Proposals:\n"
         for idx, p in enumerate(proposals, start=1):
-            judge_instruction += f"Proposal {idx} ({p['agent_id']}): {p['content']}\n"
-        judge_instruction += "\nAll rebuttals:\n"
-        for rd in rounds_data:
-            for rb in rd["rebuttals"]:
-                judge_instruction += f"{rb['agent_id']}: {rb['content']}\n"
+            judge_instruction += f"{idx}: {p['content'][:300]}\n"
+        if rounds_data:
+            judge_instruction += "\nRebuttals:\n"
+            for rb in rounds_data[-1]["rebuttals"]:
+                judge_instruction += f"- {rb['content'][:200]}\n"
 
         judge_result = await judge_agent.run(judge_instruction, context=context, model_name=model_name)
 
