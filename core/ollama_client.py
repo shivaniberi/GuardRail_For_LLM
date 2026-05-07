@@ -24,10 +24,10 @@ OLLAMA_HOST = "http://localhost:11434"
 
 # HF Router model IDs with :novita provider suffix (fast, free tier)
 HF_MODELS = {
-    "qwen0.5":   "Qwen/Qwen2.5-0.5B-Instruct:novita",
-    "qwen2.5":   "Qwen/Qwen2.5-7B-Instruct:novita",
+    "qwen0.5":   "Qwen/Qwen2.5-7B-Instruct:together",
+    "qwen2.5":   "Qwen/Qwen2.5-7B-Instruct:together",
     "llama3":    "meta-llama/Llama-3.1-8B-Instruct:novita",
-    "mistral":   "mistralai/Mistral-7B-Instruct-v0.3:novita",
+    "mistral":   "meta-llama/Llama-3.1-8B-Instruct:novita",
     "phi3":      "meta-llama/Llama-3.1-8B-Instruct:novita",
     "gemma3:1b": "meta-llama/Llama-3.1-8B-Instruct:novita",
     "gemma:2b":  "meta-llama/Llama-3.1-8B-Instruct:novita",
