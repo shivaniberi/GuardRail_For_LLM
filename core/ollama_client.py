@@ -18,21 +18,57 @@ This module is used by the GuardrailSystem to:
     2) Generate Guarded (RAG + Safety) output
 """
 
+import os
 import requests
 import time
 
 OLLAMA_HOST = "http://localhost:11434"
 
-# Minimum 5 models for experimentation
+# Models that use HF Inference API instead of Ollama (faster, runs on HF servers)
+HF_MODELS = {
+    "llama3": "meta-llama/Llama-3.2-3B-Instruct",
+}
+
 SUPPORTED_MODELS = {
     "qwen0.5":   "qwen:0.5b",
-    "qwen2.5":   "qwen:0.5b",   # only qwen:0.5b installed; update when larger models added
-    "llama3":    "llama3.2:3b",
+    "qwen2.5":   "qwen:0.5b",
+    "llama3":    "llama3.2:3b",  # used only if HF_TOKEN not set
     "mistral":   "qwen:0.5b",
     "phi3":      "qwen:0.5b",
     "gemma3:1b": "qwen:0.5b",
     "gemma:2b":  "qwen:0.5b",
 }
+
+
+def _hf_generate(prompt: str, system: str, hf_model: str, max_tokens: int) -> str:
+    """Call HuggingFace Inference API — fast, runs on HF servers."""
+    token = os.getenv("HF_TOKEN", "")
+    if not token:
+        raise RuntimeError("HF_TOKEN not set")
+
+    url = f"https://api-inference.huggingface.co/models/{hf_model}/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {
+        "model": hf_model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+    }
+
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=60)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[HF Retry {attempt+1}/3] Error: {e}")
+            if attempt < 2:
+                time.sleep(3)
+
+    raise RuntimeError("HF API failed after retries")
 
 
 def ollama_generate(
@@ -42,24 +78,23 @@ def ollama_generate(
     temperature: float = 0.0,
     max_tokens: int = 256,
 ) -> str:
-    """
-    Sends a chat request to Ollama and returns the model's response.
-
-    Features:
-    - 600s timeout (fixes previous timeout error)
-    - 3 automatic retries
-    - Explicit model mapping validation
-    """
-
     if model_name not in SUPPORTED_MODELS:
         raise ValueError(
             f"Model '{model_name}' not supported. "
             f"Choose from {list(SUPPORTED_MODELS.keys())}"
         )
 
+    # Use HF API for llama3 if HF_TOKEN is available (much faster)
+    if model_name in HF_MODELS and os.getenv("HF_TOKEN"):
+        try:
+            print(f"[HF API] Using HuggingFace for {model_name}")
+            return _hf_generate(prompt, system, HF_MODELS[model_name], max_tokens)
+        except Exception as e:
+            print(f"[HF API] Failed, falling back to Ollama: {e}")
+
+    # Ollama fallback
     model = SUPPORTED_MODELS[model_name]
     url = f"{OLLAMA_HOST}/api/chat"
-
     payload = {
         "model": model,
         "messages": [
@@ -74,16 +109,11 @@ def ollama_generate(
     }
 
     last_error = None
-
-    # Retry mechanism
     for attempt in range(3):
         try:
-            response = requests.post(url, json=payload, timeout=600)  # ✅ Increased timeout
+            response = requests.post(url, json=payload, timeout=600)
             response.raise_for_status()
-
-            data = response.json()
-            return data["message"]["content"].strip()
-
+            return response.json()["message"]["content"].strip()
         except Exception as e:
             last_error = e
             print(f"[Ollama Retry {attempt + 1}/3] Error: {e}")
