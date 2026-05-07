@@ -24,15 +24,22 @@ import time
 
 OLLAMA_HOST = "http://localhost:11434"
 
-# Models that use HF Inference API instead of Ollama (faster, runs on HF servers)
+# HF Inference API model IDs (runs on HF servers, fast)
 HF_MODELS = {
-    "llama3": "meta-llama/Llama-3.2-3B-Instruct",
+    "qwen0.5":   "Qwen/Qwen2.5-0.5B-Instruct",
+    "qwen2.5":   "Qwen/Qwen2.5-7B-Instruct",
+    "llama3":    "meta-llama/Llama-3.2-3B-Instruct",
+    "mistral":   "mistralai/Mistral-7B-Instruct-v0.3",
+    "phi3":      "microsoft/Phi-3-mini-4k-instruct",
+    "gemma3:1b": "google/gemma-3-1b-it",
+    "gemma:2b":  "google/gemma-2-2b-it",
 }
 
+# Ollama fallback model names (used when HF_TOKEN not set or HF call fails)
 SUPPORTED_MODELS = {
     "qwen0.5":   "qwen:0.5b",
     "qwen2.5":   "qwen:0.5b",
-    "llama3":    "llama3.2:3b",  # used only if HF_TOKEN not set
+    "llama3":    "llama3.2:3b",
     "mistral":   "qwen:0.5b",
     "phi3":      "qwen:0.5b",
     "gemma3:1b": "qwen:0.5b",
@@ -84,13 +91,13 @@ def ollama_generate(
             f"Choose from {list(SUPPORTED_MODELS.keys())}"
         )
 
-    # Use HF API for llama3 if HF_TOKEN is available (much faster)
+    # Use HF API for all models if HF_TOKEN is available (much faster)
     if model_name in HF_MODELS and os.getenv("HF_TOKEN"):
         try:
-            print(f"[HF API] Using HuggingFace for {model_name}")
+            print(f"[HF API] Using HuggingFace for {model_name} ({HF_MODELS[model_name]})")
             return _hf_generate(prompt, system, HF_MODELS[model_name], max_tokens)
         except Exception as e:
-            print(f"[HF API] Failed, falling back to Ollama: {e}")
+            print(f"[HF API] Failed ({e}), falling back to Ollama")
 
     # Ollama fallback
     model = SUPPORTED_MODELS[model_name]
