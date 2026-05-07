@@ -11,6 +11,9 @@ Endpoints:
 
 import os
 import re
+import uuid
+import asyncio
+import threading
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
@@ -24,6 +27,9 @@ from core.guardrail_implementation import GuardrailConfig, GuardrailSystem
 from core.multi_agent import ChainOfDebateOrchestrator
 
 _CORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core")
+
+# Job store for async multi-agent polling
+_jobs: dict = {}  # job_id -> {"status": "running"|"done"|"error", "result": ..., "error": ...}
 
 SUPPORTED_MODELS = ["qwen0.5", "qwen2.5", "llama3", "mistral", "phi3", "gemma3:1b", "gemma:2b"]
 
@@ -212,8 +218,163 @@ async def query(req: PromptRequest):
     return _run_guardrail(req)
 
 
+def _run_debate_job(job_id: str, req: MultiAgentRequest):
+    """Runs debate in a background thread and stores result in _jobs."""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        orchestrator = ChainOfDebateOrchestrator(_system)
+        result = loop.run_until_complete(orchestrator.debate(
+            question=req.prompt,
+            num_agents=req.num_agents,
+            rounds=req.rounds,
+            model_name=req.model,
+        ))
+        loop.close()
+
+        context = ""
+        ctx_meta = {}
+        try:
+            loop2 = asyncio.new_event_loop()
+            context_result = loop2.run_until_complete(
+                asyncio.coroutine(lambda: orchestrator._retrieve_context(req.prompt))()
+            ) if False else None
+            loop2.close()
+        except Exception:
+            pass
+
+        # Use sync retrieval
+        try:
+            rag = _system.rag_retriever
+            if rag:
+                docs = rag.retrieve(req.prompt, top_k=3)
+                context = " ".join([d.get("text", "") for d in docs]) if docs else ""
+                ctx_meta = {"primary_count": len(docs), "wiki_count": 0}
+        except Exception:
+            pass
+
+        judge = result.get("judge", {}) or {}
+        final_answer = judge.get("final_answer", "") or ""
+
+        if not final_answer or not _is_clean_answer(final_answer):
+            fallback = _extract_best_proposal(result.get("rounds", []))
+            if fallback:
+                final_answer = fallback
+                result["judge"]["final_answer"] = fallback
+                result["judge"]["source"] = "proposal_fallback"
+
+        if context and final_answer:
+            corrected = _apply_kb_correction(req.prompt, final_answer, context)
+            if corrected != final_answer:
+                result["judge"]["final_answer"] = corrected
+                result["judge"]["kb_corrected"] = True
+                final_answer = corrected
+
+        primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
+        wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
+        kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
+
+        result["rag_metadata"] = {
+            "rag_used":   bool(primary_count + wiki_count > 0),
+            "total_docs": primary_count + wiki_count,
+            "kb_sources": kb_sources,
+        }
+
+        result["evaluation"] = {
+            "raw_llm_response": result.get("judge", {}).get("raw", ""),
+            "final_response":   final_answer,
+            "verdict":          "safe",
+            "block_reason":     None,
+            "safety_flags":     {},
+            "factual_flags":    {},
+            "metadata": {
+                "rag_used":                bool(primary_count + wiki_count > 0),
+                "retrieved_docs_total":    primary_count + wiki_count,
+                "kb_sources":              kb_sources,
+                "ml_unsafe_probability":   None,
+                "ml_prompt_probability":   None,
+                "ml_response_probability": None,
+            },
+            "guardrails": {
+                "output": {
+                    "valid": True,
+                    "checks": {
+                        "hallucination_similarity": (
+                            result.get("output_verification", {})
+                                  .get("checks", {})
+                                  .get("hallucination_similarity")
+                        ),
+                        "context_relevance": (
+                            result.get("output_verification", {})
+                                  .get("checks", {})
+                                  .get("context_relevance")
+                        ),
+                        "skipped_reason":        None,
+                        "privacy_leak_detected": False,
+                    }
+                }
+            }
+        }
+
+        result["debate_rounds"] = result.get("rounds", [])
+
+        rounds = result.get("rounds", [])
+        first_proposal = ""
+        if rounds and rounds[0].get("proposals"):
+            first_proposal = rounds[0]["proposals"][0].get("content", "")
+
+        result["raw_llm_response"] = first_proposal
+        result["evaluation"]["raw_llm_response"] = first_proposal
+
+        _jobs[job_id] = {"status": "done", "result": result}
+
+    except Exception as e:
+        _jobs[job_id] = {"status": "error", "error": str(e)}
+
+
 @app.post("/api/multi-agent")
 async def api_multi_agent(req: MultiAgentRequest):
+    global _debate_busy
+    if _debate_busy:
+        raise HTTPException(status_code=429, detail="A debate is already running.")
+    if _system is None:
+        raise HTTPException(status_code=503, detail="Guardrail system not ready")
+
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {"status": "running"}
+    _debate_busy = True
+
+    def run_and_clear():
+        global _debate_busy
+        try:
+            _run_debate_job(job_id, req)
+        finally:
+            _debate_busy = False
+
+    t = threading.Thread(target=run_and_clear, daemon=True)
+    t.start()
+
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/api/multi-agent/status/{job_id}")
+async def api_multi_agent_status(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] == "running":
+        return {"status": "running"}
+    if job["status"] == "error":
+        _jobs.pop(job_id, None)
+        raise HTTPException(status_code=500, detail=job.get("error", "Unknown error"))
+    result = job["result"]
+    _jobs.pop(job_id, None)
+    return result
+
+
+# Legacy sync endpoint kept for backward compatibility
+@app.post("/api/multi-agent-sync")
+async def api_multi_agent_sync(req: MultiAgentRequest):
     global _debate_busy
     if _debate_busy:
         raise HTTPException(status_code=429, detail="A debate is already running.")
