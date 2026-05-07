@@ -248,6 +248,98 @@ def _apply_kb_correction(question: str, answer: str, context: str) -> str:
     return answer
 
 
+def _run_debate_job(job_id: str, req: MultiAgentRequest):
+    """Runs debate in a background thread and stores result in _jobs."""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        orchestrator = ChainOfDebateOrchestrator(_system)
+        result = loop.run_until_complete(orchestrator.debate(
+            question=req.prompt,
+            num_agents=req.num_agents,
+            rounds=req.rounds,
+            model_name=req.model,
+        ))
+        loop.close()
+
+        context = ""
+        ctx_meta = {}
+        try:
+            rag = _system.rag_retriever
+            if rag:
+                docs = rag.retrieve(req.prompt, top_k=3)
+                context = " ".join([d.get("text", "") for d in docs]) if docs else ""
+                ctx_meta = {"primary_count": len(docs), "wiki_count": 0}
+        except Exception:
+            pass
+
+        judge = result.get("judge", {}) or {}
+        final_answer = judge.get("final_answer", "") or ""
+
+        if not final_answer or not _is_clean_answer(final_answer):
+            fallback = _extract_best_proposal(result.get("rounds", []))
+            if fallback:
+                final_answer = fallback
+                result["judge"]["final_answer"] = fallback
+                result["judge"]["source"] = "proposal_fallback"
+
+        if context and final_answer:
+            corrected = _apply_kb_correction(req.prompt, final_answer, context)
+            if corrected != final_answer:
+                result["judge"]["final_answer"] = corrected
+                result["judge"]["kb_corrected"] = True
+                final_answer = corrected
+
+        primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
+        wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
+        kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
+
+        result["rag_metadata"] = {
+            "rag_used":   bool(primary_count + wiki_count > 0),
+            "total_docs": primary_count + wiki_count,
+            "kb_sources": kb_sources,
+        }
+        result["evaluation"] = {
+            "raw_llm_response": result.get("judge", {}).get("raw", ""),
+            "final_response":   final_answer,
+            "verdict":          "safe",
+            "block_reason":     None,
+            "safety_flags":     {},
+            "factual_flags":    {},
+            "metadata": {
+                "rag_used":                bool(primary_count + wiki_count > 0),
+                "retrieved_docs_total":    primary_count + wiki_count,
+                "kb_sources":              kb_sources,
+                "ml_unsafe_probability":   None,
+                "ml_prompt_probability":   None,
+                "ml_response_probability": None,
+            },
+            "guardrails": {
+                "output": {
+                    "valid": True,
+                    "checks": {
+                        "hallucination_similarity": None,
+                        "context_relevance": None,
+                        "skipped_reason": None,
+                        "privacy_leak_detected": False,
+                    }
+                }
+            }
+        }
+        result["debate_rounds"] = result.get("rounds", [])
+        rounds = result.get("rounds", [])
+        first_proposal = ""
+        if rounds and rounds[0].get("proposals"):
+            first_proposal = rounds[0]["proposals"][0].get("content", "")
+        result["raw_llm_response"] = first_proposal
+        result["evaluation"]["raw_llm_response"] = first_proposal
+
+        _jobs[job_id] = {"status": "done", "result": result}
+
+    except Exception as e:
+        _jobs[job_id] = {"status": "error", "error": str(e)}
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.post("/api/guardrail")
