@@ -276,12 +276,18 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
         judge = result.get("judge", {}) or {}
         final_answer = judge.get("final_answer", "") or ""
 
-        if not final_answer or not _is_clean_answer(final_answer):
+        # Always fallback to best proposal if final_answer is empty or noisy
+        if not final_answer or not _is_clean_answer(final_answer) or len(final_answer.strip()) < 5:
             fallback = _extract_best_proposal(result.get("rounds", []))
             if fallback:
                 final_answer = fallback
                 result["judge"]["final_answer"] = fallback
                 result["judge"]["source"] = "proposal_fallback"
+
+        # Last resort: use raw judge output
+        if not final_answer or len(final_answer.strip()) < 5:
+            final_answer = judge.get("raw", "") or ""
+            result["judge"]["final_answer"] = final_answer
 
         if context and final_answer:
             corrected = _apply_kb_correction(req.prompt, final_answer, context)
