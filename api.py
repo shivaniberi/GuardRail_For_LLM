@@ -16,6 +16,9 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 import re
+import uuid
+import asyncio
+import threading
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
@@ -29,6 +32,9 @@ from core.guardrail_implementation import GuardrailConfig, GuardrailSystem
 from core.multi_agent import ChainOfDebateOrchestrator
 
 _CORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "core")
+
+# Job store for async multi-agent polling
+_jobs: dict = {}  # job_id -> {"status": "running"|"done"|"error", "result": ..., "error": ...}
 
 SUPPORTED_MODELS = ["qwen0.5", "qwen2.5", "llama3", "mistral", "phi3", "gemma3:1b", "gemma:2b"]
 
@@ -268,6 +274,47 @@ async def api_feedback(req: FeedbackRequest):
 
 @app.post("/api/multi-agent")
 async def api_multi_agent(req: MultiAgentRequest):
+    global _debate_busy
+    if _debate_busy:
+        raise HTTPException(status_code=429, detail="A debate is already running.")
+    if _system is None:
+        raise HTTPException(status_code=503, detail="Guardrail system not ready")
+
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {"status": "running"}
+    _debate_busy = True
+
+    def run_and_clear():
+        global _debate_busy
+        try:
+            _run_debate_job(job_id, req)
+        finally:
+            _debate_busy = False
+
+    t = threading.Thread(target=run_and_clear, daemon=True)
+    t.start()
+
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/api/multi-agent/status/{job_id}")
+async def api_multi_agent_status(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] == "running":
+        return {"status": "running"}
+    if job["status"] == "error":
+        _jobs.pop(job_id, None)
+        raise HTTPException(status_code=500, detail=job.get("error", "Unknown error"))
+    result = job["result"]
+    _jobs.pop(job_id, None)
+    return result
+
+
+# Legacy sync endpoint kept for backward compatibility
+@app.post("/api/multi-agent-sync")
+async def api_multi_agent_sync(req: MultiAgentRequest):
     global _debate_busy
     if _debate_busy:
         raise HTTPException(status_code=429, detail="A debate is already running.")

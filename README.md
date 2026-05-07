@@ -1,4 +1,4 @@
-# Guardrail System for LLM.
+# Guardrail System for LLM
 
 This project provides a complete guardrail framework for the Large language model. It introduces safety, reliability, and factual-accuracy checks around model inputs and outputs, ensuring more trustworthy and controlled deployments.
 
