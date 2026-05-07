@@ -3,7 +3,7 @@ import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://0b8c-52-55-13-232.ngrok-free.app';
-
+//const API_BASE = 'http://127.0.0.1:8000';
 // Strip markdown formatting for display in UI panels
 function stripMarkdown(text: string): string {
   if (!text || text === '—') return text;
@@ -103,8 +103,12 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
   const panelBg    = dk ? 'bg-gray-800 border-gray-700' : 'bg-white border-slate-200';
   const card       = dk ? 'bg-gray-900 border border-gray-700' : 'bg-slate-50 border border-slate-200';
 
-  const meta    = result?.metadata || {};
-  const out     = result?.guardrails?.output || null;
+  //const meta    = result?.metadata || {};
+  //const out     = result?.guardrails?.output || null;
+
+  // Read from the actual API response shape
+  const meta = result?.rag_metadata || result?.metadata || {};
+  const out  = result?.output_guardrail || result?.guardrails?.output || null;
 
   // verdict: use rule_based.valid when blocked, else check safety_flags
   const ruleValid  = result?.guardrails?.input?.rule_based?.valid;
@@ -128,12 +132,21 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
   }
 
   // ML probability: backend stores in metadata.ml_unsafe_probability
-  const mlProb     = meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
+  //const mlProb     = meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
+  const mlProb = result?.input_guardrail?.ml_based?.unsafe_probability
+            ?? meta?.ml_unsafe_probability
+            ?? result?.guardrails?.input?.ml_based?.unsafe_probability
+            ?? null;
+
   const mlPrompt   = meta?.ml_prompt_probability ?? null;
   const mlResponse = meta?.ml_response_probability ?? null;
 
   // Hallucination: backend stores in guardrails.output.checks.hallucination_similarity
-  const hallSim = out?.checks?.hallucination_similarity ?? null;
+  //const hallSim = out?.checks?.hallucination_similarity ?? null;
+  const hallSim = out?.hallucination_similarity
+             ?? out?.checks?.hallucination_similarity
+             ?? null;
+
 
   return (
     <div className={`mt-2 rounded-xl border shadow-lg overflow-hidden ${panelBg}`}>
@@ -228,8 +241,8 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
           <div>
             <h3 className={`text-xs font-semibold uppercase tracking-widest mb-2 ${cardTitle}`}>RAG Metadata</h3>
             <p className={`text-xs ${cardText}`}>RAG used: <span className="font-semibold">{String(meta?.rag_used ?? false)}</span></p>
-            <p className={`text-xs ${cardText}`}>Retrieved docs: <span className="font-semibold">{meta?.retrieved_docs_total ?? 0}</span></p>
-            <p className={`text-xs ${cardText}`}>KB sources: <span className="font-semibold">{meta?.kb_sources?.join(', ') || 'none'}</span></p>
+            <p className={`text-xs ${cardText}`}>Retrieved docs: <span className="font-semibold">{meta?.total_docs ?? meta?.retrieved_docs_total ?? 0}</span></p>
+            <p className={`text-xs ${cardText}`}>KB sources: <span className="font-semibold">{meta?.kb_sources?.join?.(', ') || 'none'}</span></p>
           </div>
         </div>
       </div>

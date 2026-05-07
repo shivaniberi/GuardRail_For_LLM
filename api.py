@@ -254,12 +254,46 @@ async def api_multi_agent(req: MultiAgentRequest):
                 result["judge"]["source"] = "proposal_fallback"
 
         # 4. Apply KB correction to fix hallucinations
-        if context and final_answer:
-            corrected = _apply_kb_correction(req.prompt, final_answer, context)
-            if corrected != final_answer:
-                result["judge"]["final_answer"] = corrected
-                result["judge"]["kb_corrected"] = True
-                final_answer = corrected
+        #if context and final_answer:
+        #    corrected = _apply_kb_correction(req.prompt, final_answer, context)
+         #   if corrected != final_answer:
+         #       result["judge"]["final_answer"] = corrected
+          #      result["judge"]["kb_corrected"] = True
+         #       final_answer = corrected
+           # 4. Apply KB correction to fix hallucinations
+
+        if final_answer:
+            # Negation KB works without RAG context — always check it
+            try:
+                from core.guardrail_implementation import _lookup_factual_negation
+                negation = _lookup_factual_negation(req.prompt)
+                if negation:
+                    result["judge"]["final_answer"] = negation
+                    result["judge"]["kb_corrected"] = True
+                    result["judge"]["correction_source"] = "factual_negation_kb"
+                    final_answer = negation
+            except Exception:
+                pass
+
+            # Wikipedia KB correction needs context
+            if context:
+                corrected = _apply_kb_correction(req.prompt, final_answer, context)
+                if corrected != final_answer:
+                    result["judge"]["final_answer"] = corrected
+                    result["judge"]["kb_corrected"] = True
+                    final_answer = corrected
+
+        # 4b. Run ML guardrail on the final answer
+        ml_unsafe_prob = None
+        ml_response_prob = None
+        
+        if final_answer and _system is not None:
+            try:
+                ml_result = _system.ml_input_guardrail.validate(final_answer)
+                ml_response_prob = ml_result.get("unsafe_probability")
+                ml_unsafe_prob = ml_response_prob
+            except Exception:
+                pass
 
         # 5. Build RAG metadata
         primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
@@ -284,9 +318,9 @@ async def api_multi_agent(req: MultiAgentRequest):
                 "rag_used":                bool(primary_count + wiki_count > 0),
                 "retrieved_docs_total":    primary_count + wiki_count,
                 "kb_sources":              kb_sources,  # list — must be array not string
-                "ml_unsafe_probability":   None,
+                "ml_unsafe_probability":   ml_unsafe_prob,
                 "ml_prompt_probability":   None,
-                "ml_response_probability": None,
+                "ml_response_probability": ml_unsafe_prob,
             },
             "guardrails": {
                 "output": {
