@@ -22,15 +22,11 @@ import time
 
 OLLAMA_HOST = "http://localhost:11434"
 
-# HF Router model IDs with :novita provider suffix (fast, free tier)
+# Only models confirmed working on HF router — others fall back to Ollama
 HF_MODELS = {
     "qwen0.5":   "Qwen/Qwen2.5-7B-Instruct:together",
     "qwen2.5":   "Qwen/Qwen2.5-7B-Instruct:together",
     "llama3":    "meta-llama/Llama-3.1-8B-Instruct:novita",
-    "mistral":   "meta-llama/Llama-3.1-8B-Instruct:novita",
-    "phi3":      "meta-llama/Llama-3.1-8B-Instruct:novita",
-    "gemma3:1b": "meta-llama/Llama-3.1-8B-Instruct:novita",
-    "gemma:2b":  "meta-llama/Llama-3.1-8B-Instruct:novita",
 }
 
 # Ollama fallback model names (used when HF_TOKEN not set or HF call fails)
