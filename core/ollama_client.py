@@ -67,7 +67,9 @@ def _hf_generate(prompt: str, system: str, hf_model: str, max_tokens: int) -> st
 
     for attempt in range(3):
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=60)
+            session = requests.Session()
+            session.headers.update({"Connection": "close"})
+            resp = session.post(url, json=payload, headers=headers, timeout=60)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"].strip()
         except Exception as e:
