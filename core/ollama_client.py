@@ -28,7 +28,7 @@ OLLAMA_HOST = "http://localhost:11434"
 HF_MODELS = {
     "qwen0.5":   "Qwen/Qwen2.5-0.5B-Instruct",
     "qwen2.5":   "Qwen/Qwen2.5-7B-Instruct",
-    "llama3":    "meta-llama/Llama-3.2-3B-Instruct",
+    "llama3":    "Qwen/Qwen2.5-7B-Instruct",
     "mistral":   "mistralai/Mistral-7B-Instruct-v0.3",
     "phi3":      "microsoft/Phi-3-mini-4k-instruct",
     "gemma3:1b": "google/gemma-3-1b-it",
