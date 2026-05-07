@@ -85,6 +85,7 @@ interface Message {
   text: string;
   result?: any;
   mode?: 'single' | 'multi';
+  prompt?: string;
 }
 
 interface Conversation {
@@ -129,23 +130,19 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
 
   // ML probability: backend stores in metadata.ml_unsafe_probability
   //const mlProb     = meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
-  //change 1:
-  const mlProb = result?.input_guardrail?.ml_based?.unsafe_probability
-            ?? meta?.ml_unsafe_probability
-            ?? result?.guardrails?.input?.ml_based?.unsafe_probability
-            ?? null;
-  
-  
-  
-  //const mlPrompt   = meta?.ml_prompt_probability ?? null;
-  //const mlResponse = meta?.ml_response_probability ?? null;
+  //ML SCORE change 1
+  const mlProb = result?.input_guardrail?.ml_based?.unsafe_probability ?? meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
+  const mlPrompt   = meta?.ml_prompt_probability ?? null;
+  const mlResponse = meta?.ml_response_probability ?? null;
 
   // Hallucination: backend stores in guardrails.output.checks.hallucination_similarity
   //const hallSim = out?.checks?.hallucination_similarity ?? null;
-  //change 2:
-  const hallSim = out?.hallucination_similarity
-             ?? out?.checks?.hallucination_similarity
-             ?? null;
+  //ML Score change 2
+  const hallSim = out?.hallucination_similarity ?? out?.checks?.hallucination_similarity ?? null;
+
+
+
+
 
   return (
     <div className={`mt-2 rounded-xl border shadow-lg overflow-hidden ${panelBg}`}>
@@ -216,7 +213,12 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
             <div className={`flex justify-between text-xs mt-1 ${cardTitle}`}>
               <span>0% (Safe)</span><span>20% (Threshold)</span><span>100% (Unsafe)</span>
             </div>
-            
+            {(mlPrompt != null || mlResponse != null) && (
+              <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
+                {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
+                {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
+              </div>
+            )}
           </div>
 
           <div>
@@ -243,7 +245,9 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
     </div>
   );
 }
-//change 3 in line 243 added ----> meta?.retrieved_docs_total ?? 
+//change 3 --> Retrieved docs line
+
+
 // ── Multi-Agent Debate Panel ──────────────────────────────────────────────────
 function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light' }) {
   const dk = theme === 'dark';
@@ -271,8 +275,8 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
 
   // ML probability: from evaluation.metadata
   const mlProb     = meta?.ml_unsafe_probability ?? null;
-  //const mlPrompt   = meta?.ml_prompt_probability ?? null;
-  //const mlResponse = meta?.ml_response_probability ?? null;
+  const mlPrompt   = meta?.ml_prompt_probability ?? null;
+  const mlResponse = meta?.ml_response_probability ?? null;
 
   // RAW LLM RESPONSE = evaluation.raw_llm_response (unguarded candidate answer)
   const rawLLM = cleanResponse(ev?.raw_llm_response || '—');
@@ -370,7 +374,12 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
             <div className={`flex justify-between text-xs mt-1 ${labelColor}`}>
               <span>0% (Safe)</span><span>20% (Threshold)</span><span>100% (Unsafe)</span>
             </div>
-           
+            {(mlPrompt != null || mlResponse != null) && (
+              <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
+                {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
+                {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
+              </div>
+            )}
           </div>
 
           <div>
@@ -409,7 +418,25 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
 // ── Chat bubble ───────────────────────────────────────────────────────────────
 function ChatBubble({ msg, theme }: { msg: Message; theme: 'dark' | 'light' }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [feedback, setFeedback] = useState<null | 'up' | 'down'>(null);
+  const [correction, setCorrection] = useState('');
+  const [correctionSent, setCorrectionSent] = useState(false);
   const dk = theme === 'dark';
+
+  const sendFeedback = async (rating: number, correctionText = '') => {
+    try {
+      await fetch(`${API_BASE}/api/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: msg.prompt || '',
+          response: msg.text || '',
+          rating,
+          correction: correctionText,
+        }),
+      });
+    } catch (_) {}
+  };
 
   // Clean at render time so even old messages from localStorage are stripped
   const displayText = msg.role === 'assistant' ? stripMarkdown(cleanResponse(msg.text)) : msg.text;
@@ -446,6 +473,41 @@ function ChatBubble({ msg, theme }: { msg: Message; theme: 'dark' | 'light' }) {
         <button onClick={() => setShowAnalysis(v => !v)} className="mt-1 ml-1 text-xs text-emerald-500 hover:text-emerald-400 underline underline-offset-2 transition-colors">
           {showAnalysis ? 'Hide Details' : 'View Details'}
         </button>
+      )}
+      {msg.role === 'assistant' && msg.text && (
+        <div className="flex items-center gap-2 mt-1 ml-1 flex-wrap">
+          <button
+            onClick={() => { setFeedback('up'); sendFeedback(1); }}
+            className={`text-base transition-opacity ${feedback === 'up' ? 'opacity-100' : 'opacity-40 hover:opacity-80'}`}
+            title="Good answer"
+          >👍</button>
+          <button
+            onClick={() => { setFeedback('down'); }}
+            className={`text-base transition-opacity ${feedback === 'down' ? 'opacity-100' : 'opacity-40 hover:opacity-80'}`}
+            title="Wrong answer"
+          >👎</button>
+          {feedback === 'down' && !correctionSent && (
+            <div className="flex items-center gap-1 ml-1">
+              <input
+                type="text"
+                value={correction}
+                onChange={e => setCorrection(e.target.value)}
+                placeholder="What's the correct answer? (optional)"
+                className={`text-xs px-2 py-1 rounded border w-52 ${dk ? 'bg-gray-700 border-gray-600 text-gray-100' : 'bg-white border-slate-300 text-slate-800'}`}
+              />
+              <button
+                onClick={() => { sendFeedback(-1, correction); setCorrectionSent(true); }}
+                className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-500"
+              >Submit</button>
+            </div>
+          )}
+          {correctionSent && (
+            <span className="text-xs text-emerald-500 ml-1">Thanks! Saved ✓</span>
+          )}
+          {feedback === 'up' && (
+            <span className="text-xs text-emerald-500 ml-1">Thanks! ✓</span>
+          )}
+        </div>
       )}
       {showAnalysis && msg.result && (
         <div className="w-full mt-1">
@@ -552,7 +614,7 @@ export function ChatContainer() {
       let data: any;
 
       if (mode === 'multi') {
-        // Step 1: submit job, get job_id immediately
+        // Step 1: submit job, get job_id immediately (avoids ngrok 40s timeout)
         const submitResp = await fetch(`${API_BASE}/api/multi-agent`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
@@ -562,7 +624,7 @@ export function ChatContainer() {
         if (!submitResp.ok) { const t = await submitResp.text().catch(() => submitResp.statusText); throw new Error(`Server ${submitResp.status}: ${t}`); }
         const { job_id } = await submitResp.json();
 
-        // Step 2: poll until done (every 5s, up to 10 minutes)
+        // Step 2: poll every 5s until done (up to 10 minutes)
         const maxAttempts = 120;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           await new Promise(r => setTimeout(r, 5000));
@@ -595,7 +657,7 @@ export function ChatContainer() {
         const finalAnswer = cleanResponse(rawAnswer);
         setConversations(prev => prev.map(c =>
           c.id === currentId
-            ? { ...c, messages: [...c.messages, { role: 'assistant', text: finalAnswer, result: data, mode: 'multi' }] }
+            ? { ...c, messages: [...c.messages, { role: 'assistant', text: finalAnswer, result: data, mode: 'multi', prompt: sentPrompt }] }
             : c
         ));
       } else {
@@ -609,7 +671,7 @@ export function ChatContainer() {
         data = await resp.json();
         setConversations(prev => prev.map(c =>
           c.id === currentId
-            ? { ...c, messages: [...c.messages, { role: 'assistant', text: data.response || data.final_response || '', result: data, mode: 'single' }] }
+            ? { ...c, messages: [...c.messages, { role: 'assistant', text: data.response || data.final_response || '', result: data, mode: 'single', prompt: sentPrompt }] }
             : c
         ));
       }

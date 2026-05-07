@@ -147,7 +147,10 @@ def _run_guardrail(req: PromptRequest):
         prompt=prompt_to_use,
         max_new_tokens=req.max_tokens,
         use_rag=req.use_rag,
-    )
+        )
+    # print(f"[DEBUG] use_rag passed = {req.use_rag}")
+    # print(f"[DEBUG] result.metadata = {result.get('metadata', {})}")
+    # print(f"[DEBUG] Wiki docs preview: {result.get('metadata', {}).get('wiki_chunks_preview', 'NOT IN METADATA')}")
 
     # ── NEW: If human correction exists, use it as the final response ─────────
     if human_correction_found:
@@ -156,8 +159,7 @@ def _run_guardrail(req: PromptRequest):
         result["guarded_response"] = human_correction
     # ── END NEW ───────────────────────────────────────────────────────────────
 
-    # Change 1
-    # ── ML scores: prompt + response (separate) ───────────────────────────────
+    # ── NEW CHANGE 1 ML score START : prompt + response (separate) ───────────────────────────────
     final_text = result.get("final_response", "") or result.get("response", "") or ""
 
     ml_prompt_prob = result.get("metadata", {}).get("ml_unsafe_probability")
@@ -183,7 +185,7 @@ def _run_guardrail(req: PromptRequest):
         result.get("factual_flags", {}).get("hallucination_sim")
         or result.get("metadata", {}).get("hallucination_similarity")
     )
-    # ── END ML scores ─────────────────────────────────────────────────────────
+    # ── NEW CHANGE 2 ML score END ─────────────────────────────────────────────────────────
 
     return {
         "raw_llm_response": result.get("raw_llm_response", ""),
@@ -192,13 +194,14 @@ def _run_guardrail(req: PromptRequest):
         "guarded_response": result.get("final_response", ""),
         "verdict":          result.get("verdict", "unknown"),
         "block_reason":     result.get("block_reason"),
+        # NEW CHANGE 3 ML SCORE START
         "metadata": {
             "rag_used":                result.get("metadata", {}).get("rag_used"),
             "retrieved_docs_total":    result.get("metadata", {}).get("retrieved_docs_total"),
             "kb_sources":              result.get("metadata", {}).get("kb_sources"),
             "ml_unsafe_probability":   ml_unsafe_prob,
-            "ml_prompt_probability":   ml_prompt_prob,
-            "ml_response_probability": ml_response_prob,
+            "ml_prompt_probability":   None,
+            "ml_response_probability": None,
         },
         "guardrails": {
             "output": {
@@ -208,6 +211,7 @@ def _run_guardrail(req: PromptRequest):
                 },
             },
         },
+        #  NEW CHANGE 4 ML SCORE END
         "input_guardrail": {
             "rule_based": {
                 "valid": not bool(result.get("block_reason")),
@@ -293,8 +297,114 @@ def _apply_kb_correction(question: str, answer: str, context: str) -> str:
     return answer
 
 
-# ── Background worker for async multi-agent debate ────────────────────────────
+def _run_debate_job(job_id: str, req: MultiAgentRequest):
+    """Runs debate in a background thread and stores result in _jobs."""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        orchestrator = ChainOfDebateOrchestrator(_system)
+        result = loop.run_until_complete(orchestrator.debate(
+            question=req.prompt,
+            num_agents=req.num_agents,
+            rounds=req.rounds,
+            model_name=req.model,
+        ))
+        loop.close()
 
+        context = ""
+        ctx_meta = {}
+        try:
+            rag = _system.rag_retriever
+            if rag:
+                docs = rag.retrieve(req.prompt, top_k=3)
+                context = " ".join([d.get("text", "") for d in docs]) if docs else ""
+                ctx_meta = {"primary_count": len(docs), "wiki_count": 0}
+        except Exception:
+            pass
+
+        judge = result.get("judge", {}) or {}
+        final_answer = judge.get("final_answer", "") or ""
+
+        # Always fallback to best proposal if final_answer is empty or noisy
+        if not final_answer or not _is_clean_answer(final_answer) or len(final_answer.strip()) < 5:
+            fallback = _extract_best_proposal(result.get("rounds", []))
+            if fallback:
+                final_answer = fallback
+                result["judge"]["final_answer"] = fallback
+                result["judge"]["source"] = "proposal_fallback"
+
+        # Last resort: use raw judge output
+        if not final_answer or len(final_answer.strip()) < 5:
+            final_answer = judge.get("raw", "") or ""
+            result["judge"]["final_answer"] = final_answer
+
+        # NEW CHANGE 5 ML SCORE START 
+        if context and final_answer:
+            corrected = _apply_kb_correction(req.prompt, final_answer, context)
+            if corrected != final_answer:
+                result["judge"]["final_answer"] = corrected
+                result["judge"]["kb_corrected"] = True
+                final_answer = corrected
+
+        # ── ML guardrail on the final answer 
+        ml_unsafe_prob = None
+        if final_answer and _system is not None:
+            try:
+                ml_result = _system.ml_input_guardrail.validate(final_answer)
+                ml_unsafe_prob = ml_result.get("unsafe_probability")
+            except Exception:
+                pass
+
+
+        # NEW CHANGE 5 ML SCORE END
+        primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
+        wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
+        kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
+
+        result["rag_metadata"] = {
+            "rag_used":   bool(primary_count + wiki_count > 0),
+            "total_docs": primary_count + wiki_count,
+            "kb_sources": kb_sources,
+        }
+        result["evaluation"] = {
+            "raw_llm_response": result.get("judge", {}).get("raw", ""),
+            "final_response":   final_answer,
+            "verdict":          "safe",
+            "block_reason":     None,
+            "safety_flags":     {},
+            "factual_flags":    {},
+            "metadata": {
+                "rag_used":                bool(primary_count + wiki_count > 0),
+                "retrieved_docs_total":    primary_count + wiki_count,
+                "kb_sources":              kb_sources,
+                "ml_unsafe_probability":   ml_unsafe_prob, # NEW CHANGE 6 ML SCORE ---> from none to ml_unsafe_prob
+                "ml_prompt_probability":   None,
+                "ml_response_probability": None,
+            },
+            "guardrails": {
+                "output": {
+                    "valid": True,
+                    "checks": {
+                        "hallucination_similarity": None,
+                        "context_relevance": None,
+                        "skipped_reason": None,
+                        "privacy_leak_detected": False,
+                    }
+                }
+            }
+        }
+        result["debate_rounds"] = result.get("rounds", [])
+        rounds = result.get("rounds", [])
+        first_proposal = ""
+        if rounds and rounds[0].get("proposals"):
+            first_proposal = rounds[0]["proposals"][0].get("content", "")
+        result["raw_llm_response"] = first_proposal
+        result["evaluation"]["raw_llm_response"] = first_proposal
+
+        _jobs[job_id] = {"status": "done", "result": result}
+
+    except Exception as e:
+        _jobs[job_id] = {"status": "error", "error": str(e)}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -403,52 +513,25 @@ async def api_multi_agent_sync(req: MultiAgentRequest):
                 result["judge"]["final_answer"] = fallback
                 result["judge"]["source"] = "proposal_fallback"
 
-        # 4. Apply KB correction to fix hallucinations
-        #if context and final_answer:
-        #    corrected = _apply_kb_correction(req.prompt, final_answer, context)
-          #  if corrected != final_answer:
-          #      result["judge"]["final_answer"] = corrected
-           #     result["judge"]["kb_corrected"] = True
-           #     final_answer = corrected
 
-# Change 2
-# ── ML Scores fix ───────────────────────────────────────────────────
-        if final_answer:
-            # Negation KB works without RAG context — always check it
-            try:
-                from core.guardrail_implementation import _lookup_factual_negation
-                negation = _lookup_factual_negation(req.prompt)
-                if negation:
-                    result["judge"]["final_answer"] = negation
-                    result["judge"]["kb_corrected"] = True
-                    result["judge"]["correction_source"] = "factual_negation_kb"
-                    final_answer = negation
-            except Exception:
-                pass
-
-            # Wikipedia KB correction needs context
-            if context:
-                corrected = _apply_kb_correction(req.prompt, final_answer, context)
-                if corrected != final_answer:
-                    result["judge"]["final_answer"] = corrected
-                    result["judge"]["kb_corrected"] = True
-                    final_answer = corrected
+        # NEW CHANGE 7 ML SCORE START
+         # 4. Apply KB correction to fix hallucinations
+        if context and final_answer:
+            corrected = _apply_kb_correction(req.prompt, final_answer, context)
+            if corrected != final_answer:
+                result["judge"]["final_answer"] = corrected
+                result["judge"]["kb_corrected"] = True
+                final_answer = corrected
+        # NEW CHANGE 7  ML SCORE END
 
         # 4b. Run ML guardrail on the final answer
         ml_unsafe_prob = None
-        ml_response_prob = None
-        
         if final_answer and _system is not None:
             try:
                 ml_result = _system.ml_input_guardrail.validate(final_answer)
-                ml_response_prob = ml_result.get("unsafe_probability")
-                ml_unsafe_prob = ml_response_prob
+                ml_unsafe_prob = ml_result.get("unsafe_probability")
             except Exception:
                 pass
-# ── ML Scores fix - End ───────────────────────────────────────────────────
-
-
-
 
 
 
@@ -463,8 +546,6 @@ async def api_multi_agent_sync(req: MultiAgentRequest):
             "kb_sources": kb_sources,
         }
 
-
-        # Change 3 ---> ml_unsafe_prob added in line 480 and 483
         # 6. Build evaluation wrapper — this is what the frontend reads
         result["evaluation"] = {
             "raw_llm_response": result.get("judge", {}).get("raw", ""),
@@ -477,9 +558,9 @@ async def api_multi_agent_sync(req: MultiAgentRequest):
                 "rag_used":                bool(primary_count + wiki_count > 0),
                 "retrieved_docs_total":    primary_count + wiki_count,
                 "kb_sources":              kb_sources,
-                "ml_unsafe_probability":   ml_unsafe_prob, 
+                "ml_unsafe_probability":   ml_unsafe_prob, # NEW CHANGE 8 ML SCORE ---> None to ml_unsafe_prob
                 "ml_prompt_probability":   None,
-                "ml_response_probability": ml_unsafe_prob,
+                "ml_response_probability": None,
             },
             "guardrails": {
                 "output": {
