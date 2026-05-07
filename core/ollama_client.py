@@ -93,13 +93,12 @@ def ollama_generate(
             f"Choose from {list(SUPPORTED_MODELS.keys())}"
         )
 
-    # Use HF API for all models if HF_TOKEN is available (much faster)
-    if model_name in HF_MODELS and os.getenv("HF_TOKEN"):
-        try:
-            print(f"[HF API] Using HuggingFace for {model_name} ({HF_MODELS[model_name]})")
-            return _hf_generate(prompt, system, HF_MODELS[model_name], max_tokens)
-        except Exception as e:
-            print(f"[HF API] Failed ({e}), falling back to Ollama")
+    # HF API disabled — go straight to Ollama (HF serverless inference unavailable)
+    # if model_name in HF_MODELS and os.getenv("HF_TOKEN"):
+    #     try:
+    #         return _hf_generate(prompt, system, HF_MODELS[model_name], max_tokens)
+    #     except Exception as e:
+    #         print(f"[HF API] Failed ({e}), falling back to Ollama")
 
     # Ollama fallback
     model = SUPPORTED_MODELS[model_name]
