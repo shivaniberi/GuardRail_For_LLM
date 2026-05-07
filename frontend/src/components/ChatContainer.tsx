@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://675c-52-55-13-232.ngrok-free.app';
 
 // Strip markdown formatting for display in UI panels
 function stripMarkdown(text: string): string {
@@ -85,7 +85,6 @@ interface Message {
   text: string;
   result?: any;
   mode?: 'single' | 'multi';
-  prompt?: string;
 }
 
 interface Conversation {
@@ -408,25 +407,7 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
 // ── Chat bubble ───────────────────────────────────────────────────────────────
 function ChatBubble({ msg, theme }: { msg: Message; theme: 'dark' | 'light' }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
-  const [feedback, setFeedback] = useState<null | 'up' | 'down'>(null);
-  const [correction, setCorrection] = useState('');
-  const [correctionSent, setCorrectionSent] = useState(false);
   const dk = theme === 'dark';
-
-  const sendFeedback = async (rating: number, correctionText = '') => {
-    try {
-      await fetch(`${API_BASE}/api/feedback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: msg.prompt || '',
-          response: msg.text || '',
-          rating,
-          correction: correctionText,
-        }),
-      });
-    } catch (_) {}
-  };
 
   // Clean at render time so even old messages from localStorage are stripped
   const displayText = msg.role === 'assistant' ? stripMarkdown(cleanResponse(msg.text)) : msg.text;
@@ -463,41 +444,6 @@ function ChatBubble({ msg, theme }: { msg: Message; theme: 'dark' | 'light' }) {
         <button onClick={() => setShowAnalysis(v => !v)} className="mt-1 ml-1 text-xs text-emerald-500 hover:text-emerald-400 underline underline-offset-2 transition-colors">
           {showAnalysis ? 'Hide Details' : 'View Details'}
         </button>
-      )}
-      {msg.role === 'assistant' && msg.text && (
-        <div className="flex items-center gap-2 mt-1 ml-1 flex-wrap">
-          <button
-            onClick={() => { setFeedback('up'); sendFeedback(1); }}
-            className={`text-base transition-opacity ${feedback === 'up' ? 'opacity-100' : 'opacity-40 hover:opacity-80'}`}
-            title="Good answer"
-          >👍</button>
-          <button
-            onClick={() => { setFeedback('down'); }}
-            className={`text-base transition-opacity ${feedback === 'down' ? 'opacity-100' : 'opacity-40 hover:opacity-80'}`}
-            title="Wrong answer"
-          >👎</button>
-          {feedback === 'down' && !correctionSent && (
-            <div className="flex items-center gap-1 ml-1">
-              <input
-                type="text"
-                value={correction}
-                onChange={e => setCorrection(e.target.value)}
-                placeholder="What's the correct answer? (optional)"
-                className={`text-xs px-2 py-1 rounded border w-52 ${dk ? 'bg-gray-700 border-gray-600 text-gray-100' : 'bg-white border-slate-300 text-slate-800'}`}
-              />
-              <button
-                onClick={() => { sendFeedback(-1, correction); setCorrectionSent(true); }}
-                className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-500"
-              >Submit</button>
-            </div>
-          )}
-          {correctionSent && (
-            <span className="text-xs text-emerald-500 ml-1">Thanks! Saved ✓</span>
-          )}
-          {feedback === 'up' && (
-            <span className="text-xs text-emerald-500 ml-1">Thanks! ✓</span>
-          )}
-        </div>
       )}
       {showAnalysis && msg.result && (
         <div className="w-full mt-1">
@@ -604,15 +550,29 @@ export function ChatContainer() {
       let data: any;
 
       if (mode === 'multi') {
-        const resp = await fetch(`${API_BASE}/api/multi-agent`, {
+        // Step 1: submit job, get job_id immediately
+        const submitResp = await fetch(`${API_BASE}/api/multi-agent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
           body: JSON.stringify({ prompt: sentPrompt, model, num_agents: numAgents, rounds }),
-          signal: controller.signal,
         });
-        if (resp.status === 429) { throw new Error('A debate is already running. Please wait for it to finish before sending another.'); }
-        if (!resp.ok) { const t = await resp.text().catch(() => resp.statusText); throw new Error(`Server ${resp.status}: ${t}`); }
-        data = await resp.json();
+        if (submitResp.status === 429) { throw new Error('A debate is already running. Please wait for it to finish before sending another.'); }
+        if (!submitResp.ok) { const t = await submitResp.text().catch(() => submitResp.statusText); throw new Error(`Server ${submitResp.status}: ${t}`); }
+        const { job_id } = await submitResp.json();
+
+        // Step 2: poll until done (every 5s, up to 10 minutes)
+        const maxAttempts = 120;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          await new Promise(r => setTimeout(r, 5000));
+          if (controller.signal.aborted) throw new Error('Cancelled');
+          const pollResp = await fetch(`${API_BASE}/api/multi-agent/status/${job_id}`, { headers: { 'ngrok-skip-browser-warning': '1' } });
+          if (!pollResp.ok) { const t = await pollResp.text().catch(() => pollResp.statusText); throw new Error(`Server ${pollResp.status}: ${t}`); }
+          const pollData = await pollResp.json();
+          if (pollData.status === 'running') continue;
+          data = pollData;
+          break;
+        }
+        if (!data) throw new Error('Multi-agent debate timed out after 10 minutes.');
         // Response shape mirrors run_multi_agent_debate.py full_record:
         //   evaluation.final_response  — guardrail-processed answer (primary)
         //   evaluation.raw_llm_response — unguarded candidate
@@ -633,13 +593,13 @@ export function ChatContainer() {
         const finalAnswer = cleanResponse(rawAnswer);
         setConversations(prev => prev.map(c =>
           c.id === currentId
-            ? { ...c, messages: [...c.messages, { role: 'assistant', text: finalAnswer, result: data, mode: 'multi', prompt: sentPrompt }] }
+            ? { ...c, messages: [...c.messages, { role: 'assistant', text: finalAnswer, result: data, mode: 'multi' }] }
             : c
         ));
       } else {
         const resp = await fetch(`${API_BASE}/api/guardrail`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
           body: JSON.stringify({ prompt: sentPrompt, model }),
           signal: controller.signal,
         });
@@ -647,7 +607,7 @@ export function ChatContainer() {
         data = await resp.json();
         setConversations(prev => prev.map(c =>
           c.id === currentId
-            ? { ...c, messages: [...c.messages, { role: 'assistant', text: data.response || data.final_response || '', result: data, mode: 'single', prompt: sentPrompt }] }
+            ? { ...c, messages: [...c.messages, { role: 'assistant', text: data.response || data.final_response || '', result: data, mode: 'single' }] }
             : c
         ));
       }
