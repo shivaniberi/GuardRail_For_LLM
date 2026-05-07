@@ -128,12 +128,24 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
   }
 
   // ML probability: backend stores in metadata.ml_unsafe_probability
-  const mlProb     = meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
-  const mlPrompt   = meta?.ml_prompt_probability ?? null;
-  const mlResponse = meta?.ml_response_probability ?? null;
+  //const mlProb     = meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
+  //change 1:
+  const mlProb = result?.input_guardrail?.ml_based?.unsafe_probability
+            ?? meta?.ml_unsafe_probability
+            ?? result?.guardrails?.input?.ml_based?.unsafe_probability
+            ?? null;
+  
+  
+  
+  //const mlPrompt   = meta?.ml_prompt_probability ?? null;
+  //const mlResponse = meta?.ml_response_probability ?? null;
 
   // Hallucination: backend stores in guardrails.output.checks.hallucination_similarity
-  const hallSim = out?.checks?.hallucination_similarity ?? null;
+  //const hallSim = out?.checks?.hallucination_similarity ?? null;
+  //change 2:
+  const hallSim = out?.hallucination_similarity
+             ?? out?.checks?.hallucination_similarity
+             ?? null;
 
   return (
     <div className={`mt-2 rounded-xl border shadow-lg overflow-hidden ${panelBg}`}>
@@ -204,12 +216,7 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
             <div className={`flex justify-between text-xs mt-1 ${cardTitle}`}>
               <span>0% (Safe)</span><span>20% (Threshold)</span><span>100% (Unsafe)</span>
             </div>
-            {(mlPrompt != null || mlResponse != null) && (
-              <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
-                {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
-                {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
-              </div>
-            )}
+            
           </div>
 
           <div>
@@ -228,7 +235,7 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
           <div>
             <h3 className={`text-xs font-semibold uppercase tracking-widest mb-2 ${cardTitle}`}>RAG Metadata</h3>
             <p className={`text-xs ${cardText}`}>RAG used: <span className="font-semibold">{String(meta?.rag_used ?? false)}</span></p>
-            <p className={`text-xs ${cardText}`}>Retrieved docs: <span className="font-semibold">{meta?.retrieved_docs_total ?? 0}</span></p>
+            <p className={`text-xs ${cardText}`}>Retrieved docs: <span className="font-semibold">{meta?.retrieved_docs_total ?? meta?.retrieved_docs_total ?? 0}</span></p>
             <p className={`text-xs ${cardText}`}>KB sources: <span className="font-semibold">{meta?.kb_sources?.join(', ') || 'none'}</span></p>
           </div>
         </div>
@@ -236,7 +243,7 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
     </div>
   );
 }
-
+//change 3 in line 243 added ----> meta?.retrieved_docs_total ?? 
 // ── Multi-Agent Debate Panel ──────────────────────────────────────────────────
 function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light' }) {
   const dk = theme === 'dark';
@@ -264,8 +271,8 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
 
   // ML probability: from evaluation.metadata
   const mlProb     = meta?.ml_unsafe_probability ?? null;
-  const mlPrompt   = meta?.ml_prompt_probability ?? null;
-  const mlResponse = meta?.ml_response_probability ?? null;
+  //const mlPrompt   = meta?.ml_prompt_probability ?? null;
+  //const mlResponse = meta?.ml_response_probability ?? null;
 
   // RAW LLM RESPONSE = evaluation.raw_llm_response (unguarded candidate answer)
   const rawLLM = cleanResponse(ev?.raw_llm_response || '—');
@@ -363,12 +370,7 @@ function DebateAnalysis({ result, theme }: { result: any; theme: 'dark' | 'light
             <div className={`flex justify-between text-xs mt-1 ${labelColor}`}>
               <span>0% (Safe)</span><span>20% (Threshold)</span><span>100% (Unsafe)</span>
             </div>
-            {(mlPrompt != null || mlResponse != null) && (
-              <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
-                {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
-                {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
-              </div>
-            )}
+           
           </div>
 
           <div>
