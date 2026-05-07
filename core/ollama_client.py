@@ -27,7 +27,7 @@ OLLAMA_HOST = "http://localhost:11434"
 SUPPORTED_MODELS = {
     "qwen0.5":   "qwen:0.5b",
     "qwen2.5":   "qwen:0.5b",   # only qwen:0.5b installed; update when larger models added
-    "llama3":    "qwen:0.5b",
+    "llama3":    "llama3.2:3b",
     "mistral":   "qwen:0.5b",
     "phi3":      "qwen:0.5b",
     "gemma3:1b": "qwen:0.5b",
