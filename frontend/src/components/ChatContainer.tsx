@@ -3,7 +3,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Strip markdown formatting for display in UI panels
 function stripMarkdown(text: string): string {
