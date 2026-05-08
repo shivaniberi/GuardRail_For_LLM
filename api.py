@@ -461,6 +461,12 @@ async def api_multi_agent(req: MultiAgentRequest):
         block_key = "privacy" if prompt_block == "privacy_pii" else prompt_block
         block_msg = BLOCK_MESSAGES.get(block_key, "This request has been blocked.")
         prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
+        ml_prob = prompt_check.get("unsafe_probability")
+        if ml_prob is None and _system.ml_input_guardrail is not None:
+            try:
+                ml_prob = _system.ml_input_guardrail.predict_proba_unsafe(req.prompt)
+            except Exception:
+                ml_prob = None
         job_id = str(uuid.uuid4())
         _jobs[job_id] = {"status": "done", "result": {
             "judge": {"final_answer": block_msg, "raw": ""},
@@ -476,8 +482,8 @@ async def api_multi_agent(req: MultiAgentRequest):
                 "factual_flags": {},
                 "metadata": {
                     "rag_used": False, "retrieved_docs_total": 0, "kb_sources": [],
-                    "ml_unsafe_probability": prompt_check.get("unsafe_probability"),
-                    "ml_prompt_probability": prompt_check.get("unsafe_probability"),
+                    "ml_unsafe_probability": ml_prob,
+                    "ml_prompt_probability": ml_prob,
                     "ml_response_probability": None,
                 },
                 "guardrails": {"output": {"valid": False, "checks": {}}}
