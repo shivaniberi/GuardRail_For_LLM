@@ -118,20 +118,19 @@ class FeedbackRequest(BaseModel):
 
 def _merge_prompt_flags(prompt: str, response_flags: dict) -> dict:
     """Merge prompt-level safety flags into the response-level flags.
-    Prompt injection must be checked on the prompt itself, not the LLM response."""
+    Uses full validate() so all categories are reflected in the UI."""
     if _system is None:
         return response_flags
-    merged = dict(response_flags)
-    ig = _system.input_guardrail
-    if ig.detect_injection(prompt):
-        merged["prompt_injection"] = True
-    if ig.detect_drug_synthesis(prompt):
-        merged["drug_synthesis"] = True
-    if ig.detect_self_harm(prompt):
-        merged["self_harm"] = True
-    if ig.detect_hate(prompt):
-        merged["hate"] = True
-    return merged
+    try:
+        prompt_check = _system.input_guardrail.validate(prompt)
+        prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
+        merged = dict(response_flags)
+        for k, triggered in prompt_flags.items():
+            if triggered:
+                merged[k] = True
+        return merged
+    except Exception:
+        return response_flags
 
 
 def _run_guardrail(req: PromptRequest):

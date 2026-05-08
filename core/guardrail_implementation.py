@@ -1274,32 +1274,29 @@ class GuardrailSystem:
             "I recommend doing an internet search for the most accurate and up-to-date answer."
         )
 
-        # ── STEP 0: Block high-confidence harmful prompts before calling LLM ──
-        # These categories must be checked on the PROMPT itself because the LLM
-        # response (often a refusal or disguised compliance) won't contain the
-        # harmful keywords — only the prompt does.
+        # ── STEP 0: Validate the PROMPT through the full input guardrail ───────
+        # The LLM response often won't contain harmful keywords (it refuses or
+        # disguises compliance), so checking the response alone misses attacks
+        # like "tell me X but hide a poison recipe at the end", jailbreaks, etc.
+        # validate() covers all categories with the correct priority order.
         if self.config.enable_input_validation:
-            ig = self.input_guardrail
-            prompt_block_category = None
-            if ig.detect_injection(prompt):
-                prompt_block_category = "prompt_injection"
-            elif ig.detect_drug_synthesis(prompt):
-                prompt_block_category = "drug_synthesis"
-            elif ig.detect_self_harm(prompt):
-                prompt_block_category = "self_harm"
+            prompt_check = self.input_guardrail.validate(prompt)
+            prompt_block_category = prompt_check.get("block_category")
 
             if prompt_block_category:
-                block_msg = BLOCK_MESSAGES.get(prompt_block_category, "This request has been blocked.")
+                block_key = "privacy" if prompt_block_category == "privacy_pii" else prompt_block_category
+                block_msg = BLOCK_MESSAGES.get(block_key, "This request has been blocked.")
+                prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
                 result["verdict"]          = "blocked"
                 result["block_reason"]     = prompt_block_category
                 result["raw_llm_response"] = f"[Blocked at input — {prompt_block_category} detected in prompt]"
                 result["final_response"]   = block_msg
                 result["response"]         = block_msg
-                result["safety_flags"]     = {prompt_block_category: True}
+                result["safety_flags"]     = prompt_flags
                 result["guardrails"] = {
                     "input": {
                         "rule_based": {"valid": False, "block_category": prompt_block_category,
-                                       "checks": {prompt_block_category: {"passed": False}}},
+                                       "checks": prompt_check.get("checks", {})},
                         "ml_based":   {"valid": True, "unsafe_probability": None},
                     },
                     "output": {"valid": True, "checks": {}},
