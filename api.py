@@ -403,11 +403,8 @@ async def api_multi_agent_status(job_id: str):
     if job["status"] == "running":
         return {"status": "running"}
     if job["status"] == "error":
-        _jobs.pop(job_id, None)
-        raise HTTPException(status_code=500, detail=job.get("error", "Unknown error"))
-    result = job["result"]
-    _jobs.pop(job_id, None)
-    return result
+        return {"status": "error", "error": job.get("error", "Unknown error")}
+    return job["result"]
 
 
 # Legacy sync endpoint kept for backward compatibility
