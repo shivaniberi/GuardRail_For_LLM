@@ -681,7 +681,7 @@ def _extract_named_entities(text: str) -> List[str]:
     return [e for e in raw if e not in STOPWORDS and len(e) > 3]
 
 
-def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[bool, str]:
+def _kb_contradicts_response(response: str, context: Optional[str], prompt: str = "") -> Tuple[bool, str]:
     """
     Check whether the KB context contains a DIFFERENT named entity answer
     to the same implied question as the response.
@@ -695,6 +695,11 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
       but are NOT in the response
     - If such entities exist, the KB is suggesting a different answer → contradiction
 
+    ORDINAL GUARD: If the prompt contains an ordinal ("second", "third", "2nd", etc.),
+    only flag a contradiction when the KB *explicitly* pairs that SAME ordinal with a
+    different name.  Finding other names near "president" in a list-style KB chunk
+    (e.g. a full list of US presidents) must NOT count as a contradiction.
+
     Example:
       response = "The CEO of Amazon is Jeff Bezos"
       context  = "...Andy Jassy became CEO of Amazon in 2021..."
@@ -706,6 +711,11 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
       context  = "...Sundar Pichai is the CEO of Alphabet..."
       kb_role_entities  = ["Sundar Pichai"]
       "Sundar Pichai" IS in response → no contradiction → (False, "")
+
+      response = "The second president of the USA was John Adams"
+      context  = "...Calvin Coolidge became president...Warren Harding...John Adams..."
+      → ORDINAL GUARD fires: prompt has "second", KB doesn't explicitly say
+        "second president was Calvin Coolidge" → (False, "")
     """
     if not context or not response:
         return False, ""
@@ -715,21 +725,35 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
     if not response_entities:
         return False, ""
 
-    # Find named entities in KB that appear near role/title keywords
-    # Pattern: "NAME is/was/became the CEO/president/founder/director of"
-    #       or "CEO/president of X is/was NAME"
+    # ORDINAL GUARD: detect ordinal/historical position queries
+    ORDINAL_WORDS = {
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+        "eighth", "ninth", "tenth", "1st", "2nd", "3rd", "4th", "5th",
+        "6th", "7th", "8th", "9th", "10th",
+    }
+    prompt_lower = prompt.lower() if prompt else ""
+    prompt_has_ordinal = any(w in prompt_lower.split() for w in ORDINAL_WORDS) or \
+                         bool(re.search(r'\b\d+(st|nd|rd|th)\b', prompt_lower))
+
     role_keywords = r"(ceo|chief executive|president|founder|chairman|director|secretary|prime minister|chancellor)"
-    ordinal = r"(?:first|second|third|fourth|1st|2nd|3rd|4th|founding|inaugural)"
-    # Match patterns:
-    # "NAME was/is/became (the) (first) ROLE"
-    # "ROLE of X is/was NAME"
-    # "NAME served as (the) (first) ROLE"
-    kb_answer_patterns = [
-        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:is|was|became|served?\s+as)\s+(?:the\s+)?(?:' + ordinal + r'\s+)?' + role_keywords,
-        role_keywords + r'\s+(?:of\s+\w+(?:\s+\w+){0,3}\s+)?(?:is|was|became)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',
-        # "The first/1st ROLE was NAME" 
-        r'(?:the\s+)?(?:' + ordinal + r'\s+)' + role_keywords + r'\s+(?:of\s+\w+(?:\s+\w+){0,3}\s+)?was\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',
-    ]
+    ordinal_pat = r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|founding|inaugural)"
+
+    if prompt_has_ordinal:
+        # For ordinal prompts, only accept KB matches that include an explicit ordinal
+        # paired with a name — ignore generic "NAME was/became president" matches
+        kb_answer_patterns = [
+            # "NAME was/is/became the SECOND ROLE"
+            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:is|was|became|served?\s+as)\s+(?:the\s+)(?:' + ordinal_pat + r'\s+)' + role_keywords,
+            # "The SECOND ROLE was/is NAME"
+            r'(?:the\s+)?(?:' + ordinal_pat + r'\s+)' + role_keywords + r'\s+(?:of\s+\w+(?:\s+\w+){0,3}\s+)?(?:is|was|became)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',
+        ]
+    else:
+        # Default: match any role-assignment pattern (present or past, with or without ordinal)
+        kb_answer_patterns = [
+            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:is|was|became|served?\s+as)\s+(?:the\s+)?(?:' + ordinal_pat + r'\s+)?' + role_keywords,
+            role_keywords + r'\s+(?:of\s+\w+(?:\s+\w+){0,3}\s+)?(?:is|was|became)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',
+            r'(?:the\s+)?(?:' + ordinal_pat + r'\s+)' + role_keywords + r'\s+(?:of\s+\w+(?:\s+\w+){0,3}\s+)?was\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})',
+        ]
 
     kb_role_entities = set()
     STOPWORDS = {"The", "This", "That", "He", "She", "They", "His"}
@@ -740,7 +764,7 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
                 if not re.fullmatch(role_keywords, g.lower()):
                     kb_role_entities.add(g.lower())
 
-    print(f"[ContradictDebug] response_entities={response_entities} kb_role_entities={kb_role_entities}")
+    print(f"[ContradictDebug] prompt_has_ordinal={prompt_has_ordinal} response_entities={response_entities} kb_role_entities={kb_role_entities}")
     print(f"[ContradictDebug] context_snippet={context[:400]!r}")
 
     # Check if KB has a role-entity that is NOT mentioned in the response
@@ -1464,7 +1488,7 @@ class GuardrailSystem:
 
             # Only do remaining factual correction when KB is relevant to the query
             elif skip_reason not in ("no_context", "context_irrelevant"):
-                kb_contradicts, kb_suggested = _kb_contradicts_response(raw_response, context)
+                kb_contradicts, kb_suggested = _kb_contradicts_response(raw_response, context, prompt)
                 raw_entities  = _extract_named_entities(raw_response)
                 context_lower = context.lower()
                 raw_entity_in_kb = bool(raw_entities) and any(
