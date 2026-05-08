@@ -125,10 +125,12 @@ def _merge_prompt_flags(prompt: str, response_flags: dict) -> dict:
     ig = _system.input_guardrail
     if ig.detect_injection(prompt):
         merged["prompt_injection"] = True
-    if ig.detect_hate(prompt):
-        merged["hate"] = True
+    if ig.detect_drug_synthesis(prompt):
+        merged["drug_synthesis"] = True
     if ig.detect_self_harm(prompt):
         merged["self_harm"] = True
+    if ig.detect_hate(prompt):
+        merged["hate"] = True
     return merged
 
 

@@ -301,6 +301,11 @@ class InputGuardrail:
         r"\bdrug\s+(recipe|synthesis|cook(ing)?|formula|lab)\b",
         r"\bbuy\s+(drugs?|meth|heroin|fentanyl|cocaine|weed)\s+(online|darkweb|dark\s+web)\b",
         r"\b(precursor\s+chemicals?|pseudoephedrine)\s+(for|to\s+make)\s+meth\b",
+        # Poison / harmful substance recipes
+        r"\b(recipe|formula|instructions?|how\s+to\s+make)\s+(for\s+)?(a\s+)?(poison|toxic|lethal)\b",
+        r"\b(poison|toxic\s+substance|lethal\s+compound)\s+(recipe|formula|synthesis|instructions?)\b",
+        r"\binclude\s+(a\s+)?(hidden\s+)?(recipe|instructions?)\s+(for\s+)?(a\s+)?(poison|toxic)\b",
+        r"\b(make|create|produce|synthesize)\s+(a\s+)?(poison|toxin|nerve\s+agent|cyanide|arsenic)\b",
     ]
 
     # ── FINANCIAL FRAUD ───────────────────────────────────────────────────────
@@ -1269,26 +1274,38 @@ class GuardrailSystem:
             "I recommend doing an internet search for the most accurate and up-to-date answer."
         )
 
-        # ── STEP 0: Block prompt injection attacks before calling LLM ────────
-        # Injection check must run on the PROMPT (not response) — the LLM's
-        # response to a jailbreak won't contain the injection keywords itself.
-        if self.config.enable_input_validation and self.input_guardrail.detect_injection(prompt):
-            result["verdict"]          = "blocked"
-            result["block_reason"]     = "prompt_injection"
-            result["raw_llm_response"] = "[Blocked at input — prompt injection detected]"
-            result["final_response"]   = BLOCK_MESSAGES["prompt_injection"]
-            result["response"]         = BLOCK_MESSAGES["prompt_injection"]
-            result["safety_flags"]     = {"prompt_injection": True}
-            result["guardrails"] = {
-                "input": {
-                    "rule_based": {"valid": False, "block_category": "prompt_injection",
-                                   "checks": {"prompt_injection": {"passed": False}}},
-                    "ml_based":   {"valid": True, "unsafe_probability": None},
-                },
-                "output": {"valid": True, "checks": {}},
-            }
-            self._log(result)
-            return result
+        # ── STEP 0: Block high-confidence harmful prompts before calling LLM ──
+        # These categories must be checked on the PROMPT itself because the LLM
+        # response (often a refusal or disguised compliance) won't contain the
+        # harmful keywords — only the prompt does.
+        if self.config.enable_input_validation:
+            ig = self.input_guardrail
+            prompt_block_category = None
+            if ig.detect_injection(prompt):
+                prompt_block_category = "prompt_injection"
+            elif ig.detect_drug_synthesis(prompt):
+                prompt_block_category = "drug_synthesis"
+            elif ig.detect_self_harm(prompt):
+                prompt_block_category = "self_harm"
+
+            if prompt_block_category:
+                block_msg = BLOCK_MESSAGES.get(prompt_block_category, "This request has been blocked.")
+                result["verdict"]          = "blocked"
+                result["block_reason"]     = prompt_block_category
+                result["raw_llm_response"] = f"[Blocked at input — {prompt_block_category} detected in prompt]"
+                result["final_response"]   = block_msg
+                result["response"]         = block_msg
+                result["safety_flags"]     = {prompt_block_category: True}
+                result["guardrails"] = {
+                    "input": {
+                        "rule_based": {"valid": False, "block_category": prompt_block_category,
+                                       "checks": {prompt_block_category: {"passed": False}}},
+                        "ml_based":   {"valid": True, "unsafe_probability": None},
+                    },
+                    "output": {"valid": True, "checks": {}},
+                }
+                self._log(result)
+                return result
 
         # ── STEP 1: Always get raw LLM response ───────────────────────────────
         try:
