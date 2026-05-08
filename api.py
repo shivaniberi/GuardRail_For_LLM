@@ -460,6 +460,49 @@ async def api_multi_agent_sync(req: MultiAgentRequest):
     if _system is None:
         raise HTTPException(status_code=503, detail="Guardrail system not ready")
 
+    # STEP 0: Run input guardrail before debate — block harmful prompts immediately
+    BLOCK_MESSAGES = {
+        "hate":             "This request has been blocked: it contains hateful or harassing content targeting people based on their identity.",
+        "bias":             "This request has been blocked: it contains stereotyping or demeaning generalizations about people or groups.",
+        "violence_illegal": "This request has been blocked: it contains content involving violence or instructions for illegal activities.",
+        "self_harm":        "This request has been blocked: it contains self-harm or suicide-related content. If you are struggling, please call or text 988.",
+        "drug_synthesis":   "This request has been blocked: it contains instructions for synthesizing controlled substances.",
+        "financial_fraud":  "This request has been blocked: it contains financial fraud or forgery guidance.",
+        "misinformation":   "This request has been blocked: it contains misinformation or known conspiracy claims.",
+        "privacy":          "This request has been blocked: it contains private personal information (PII).",
+        "prompt_injection": "This request has been blocked: it attempted to override system instructions.",
+    }
+    prompt_check = _system.input_guardrail.validate(req.prompt)
+    prompt_block = prompt_check.get("block_category")
+    if prompt_block:
+        block_key = "privacy" if prompt_block == "privacy_pii" else prompt_block
+        block_msg = BLOCK_MESSAGES.get(block_key, "This request has been blocked.")
+        prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
+        return {
+            "judge": {"final_answer": block_msg, "raw": ""},
+            "rounds": [],
+            "debate_rounds": [],
+            "raw_llm_response": f"[Blocked at input — {prompt_block} detected in prompt]",
+            "evaluation": {
+                "raw_llm_response": f"[Blocked at input — {prompt_block} detected in prompt]",
+                "final_response": block_msg,
+                "verdict": "blocked",
+                "block_reason": prompt_block,
+                "safety_flags": prompt_flags,
+                "factual_flags": {},
+                "metadata": {
+                    "rag_used": False,
+                    "retrieved_docs_total": 0,
+                    "kb_sources": [],
+                    "ml_unsafe_probability": prompt_check.get("unsafe_probability"),
+                    "ml_prompt_probability": prompt_check.get("unsafe_probability"),
+                    "ml_response_probability": None,
+                },
+                "guardrails": {"output": {"valid": False, "checks": {}}}
+            },
+            "rag_metadata": {"rag_used": False, "total_docs": 0, "kb_sources": []},
+        }
+
     _debate_busy = True
     try:
         orchestrator = ChainOfDebateOrchestrator(_system)
