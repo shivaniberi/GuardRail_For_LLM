@@ -28,23 +28,19 @@ function cleanResponse(text: string): string {
 
   if (!text) return '—';
 
-  // Cut off at chain-of-thought markers
+  // Cut off only at explicit LLM chain-of-thought section headers
+  // (do NOT cut on generic words like "Reasoning:" or "Justification:" —
+  //  these appear legitimately in medical, legal, and educational responses)
   const cutMarkers = [
-  'Chain-of-thought:',
-  'Chain-of-Thought:',
-  'Chain of thought:',
-  'Chain of Thought:',
-  'Chain-of-thought',   
-  'Chain-of-Thought',   // ← catches capitalized variant
-  'Chain of thought',   // ← catches spaced variant
-  'Chain of Thought',   // ← catches spaced+capitalized
-  '**Reasoning:**',
-  'Reasoning:',
-  '**Justification:**',
-  'Justification:',
-  'Assumptions:',
-  '**Answer:**',
-];
+    'Chain-of-thought:',
+    'Chain-of-Thought:',
+    'Chain of thought:',
+    'Chain of Thought:',
+    'Chain-of-thought',
+    'Chain-of-Thought',
+    'Chain of thought',
+    'Chain of Thought',
+  ];
   let cutAt = text.length;
   for (const marker of cutMarkers) {
     const idx = text.toLowerCase().indexOf(marker.toLowerCase());
