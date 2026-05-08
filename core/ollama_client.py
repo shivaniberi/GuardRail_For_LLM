@@ -20,13 +20,13 @@ OLLAMA_HOST = "http://localhost:11434"
 
 # Groq model IDs (fast, free tier, 30 req/min)
 GROQ_MODELS = {
-    "qwen0.5":   "llama-3.1-8b-instant",
-    "qwen2.5":   "llama-3.3-70b-versatile",
+    "qwen0.5":   "qwen/qwen3-32b",
+    "qwen2.5":   "qwen/qwen3-32b",
     "llama3":    "llama-3.1-8b-instant",
-    "mistral":   "llama-3.1-8b-instant",
+    "mistral":   "llama-3.3-70b-versatile",
     "phi3":      "llama-3.1-8b-instant",
-    "gemma3:1b": "llama-3.1-8b-instant",
-    "gemma:2b":  "llama-3.1-8b-instant",
+    "gemma3:1b": "gemma2-9b-it",
+    "gemma:2b":  "gemma2-9b-it",
 }
 
 # HF Router fallback model IDs (only confirmed working ones)
