@@ -19,10 +19,19 @@ import time
 
 
 def _strip_think_tags(text: str) -> str:
-    """Remove <think>...</think> chain-of-thought blocks from Qwen3/DeepSeek responses."""
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
-    text = re.sub(r'<think>.*', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
-    return text
+    """Remove <think>...</think> chain-of-thought blocks from Qwen3/DeepSeek responses.
+    If stripping leaves nothing (model put everything inside think tags), return the
+    content of the last think block as a fallback so the response is never empty."""
+    original = text
+    stripped = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+    stripped = re.sub(r'<think>.*', '', stripped, flags=re.DOTALL | re.IGNORECASE).strip()
+    if stripped:
+        return stripped
+    # Fallback: extract text from inside the last <think> block
+    match = re.search(r'<think>(.*?)(?:</think>|$)', original, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return original.strip()
 
 OLLAMA_HOST = "http://localhost:11434"
 
@@ -64,10 +73,13 @@ def _groq_generate(prompt: str, system: str, groq_model: str, max_tokens: int) -
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    # For Qwen3 thinking models, append /no_think to suppress chain-of-thought output
+    is_thinking_model = "qwen3" in groq_model.lower()
+    effective_system = (system + " /no_think") if is_thinking_model else system
     payload = {
         "model": groq_model,
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": effective_system},
             {"role": "user", "content": prompt},
         ],
         "max_tokens": max_tokens,
