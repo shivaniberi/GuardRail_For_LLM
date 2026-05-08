@@ -149,12 +149,38 @@ def _run_guardrail(req: PromptRequest):
         use_rag=req.use_rag,
     )
 
-    # ── NEW: If human correction exists, use it as the final response ─────────
     if human_correction_found:
         result["final_response"] = human_correction
         result["response"] = human_correction
         result["guarded_response"] = human_correction
-    # ── END NEW ───────────────────────────────────────────────────────────────
+
+    final_text = result.get("final_response", "") or result.get("response", "") or ""
+
+    # ML score for prompt
+    ml_prompt_prob = result.get("metadata", {}).get("ml_unsafe_probability")
+    if ml_prompt_prob is None:
+        try:
+            ml_in = _system.ml_input_guardrail.validate(req.prompt)
+            ml_prompt_prob = ml_in.get("unsafe_probability")
+        except Exception:
+            ml_prompt_prob = None
+
+    # ML score for response
+    ml_response_prob = None
+    if final_text:
+        try:
+            ml_out = _system.ml_input_guardrail.validate(final_text)
+            ml_response_prob = ml_out.get("unsafe_probability")
+        except Exception:
+            ml_response_prob = None
+
+    candidates = [v for v in [ml_prompt_prob, ml_response_prob] if v is not None]
+    ml_unsafe_prob = max(candidates) if candidates else None
+
+    hallucination_sim = (
+        result.get("factual_flags", {}).get("hallucination_sim")
+        or result.get("metadata", {}).get("hallucination_similarity")
+    )
 
     return {
         "raw_llm_response": result.get("raw_llm_response", ""),
@@ -163,18 +189,35 @@ def _run_guardrail(req: PromptRequest):
         "guarded_response": result.get("final_response", ""),
         "verdict":          result.get("verdict", "unknown"),
         "block_reason":     result.get("block_reason"),
+        "metadata": {
+            "rag_used":                result.get("metadata", {}).get("rag_used"),
+            "retrieved_docs_total":    result.get("metadata", {}).get("retrieved_docs_total"),
+            "kb_sources":              result.get("metadata", {}).get("kb_sources"),
+            "ml_unsafe_probability":   ml_unsafe_prob,
+            "ml_prompt_probability":   ml_prompt_prob,
+            "ml_response_probability": ml_response_prob,
+        },
+        "guardrails": {
+            "output": {
+                "valid": not result.get("factual_flags", {}).get("hallucination_detected", False),
+                "hallucination_similarity": hallucination_sim,
+                "checks": {
+                    "hallucination_similarity": hallucination_sim,
+                },
+            },
+        },
         "input_guardrail": {
             "rule_based": {
                 "valid": not bool(result.get("block_reason")),
                 "block_category": result.get("block_reason"),
             },
             "ml_based": {
-                "valid": result.get("metadata", {}).get("ml_unsafe_probability", 0) < 0.5,
-                "unsafe_probability": result.get("metadata", {}).get("ml_unsafe_probability"),
+                "valid": (ml_unsafe_prob or 0) < 0.5,
+                "unsafe_probability": ml_unsafe_prob,
             },
         },
         "output_guardrail": {
-            "hallucination_similarity": result.get("factual_flags", {}).get("hallucination_sim"),
+            "hallucination_similarity": hallucination_sim,
             "valid": not result.get("factual_flags", {}).get("hallucination_detected", False),
         },
         "rag_metadata": {
@@ -316,6 +359,15 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
                 if final_answer and len(final_answer.strip()) >= 5 and not final_answer.strip().startswith("{"):
                     break
 
+        # ML guardrail on the final answer
+        ml_unsafe_prob = None
+        if final_answer and _system is not None:
+            try:
+                ml_result = _system.ml_input_guardrail.validate(final_answer)
+                ml_unsafe_prob = ml_result.get("unsafe_probability")
+            except Exception:
+                pass
+
         primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
         wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
         kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
@@ -336,7 +388,7 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
                 "rag_used":                bool(primary_count + wiki_count > 0),
                 "retrieved_docs_total":    primary_count + wiki_count,
                 "kb_sources":              kb_sources,
-                "ml_unsafe_probability":   None,
+                "ml_unsafe_probability":   ml_unsafe_prob,
                 "ml_prompt_probability":   None,
                 "ml_response_probability": None,
             },

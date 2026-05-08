@@ -128,13 +128,13 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
     }
   }
 
-  // ML probability: backend stores in metadata.ml_unsafe_probability
-  const mlProb     = meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
+  // ML probability: prefer input_guardrail (computed per-request), fall back to metadata
+  const mlProb     = result?.input_guardrail?.ml_based?.unsafe_probability ?? meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
   const mlPrompt   = meta?.ml_prompt_probability ?? null;
   const mlResponse = meta?.ml_response_probability ?? null;
 
-  // Hallucination: backend stores in guardrails.output.checks.hallucination_similarity
-  const hallSim = out?.checks?.hallucination_similarity ?? null;
+  // Hallucination: check both top-level and nested checks field
+  const hallSim = out?.hallucination_similarity ?? out?.checks?.hallucination_similarity ?? null;
 
   return (
     <div className={`mt-2 rounded-xl border shadow-lg overflow-hidden ${panelBg}`}>
