@@ -343,6 +343,9 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
         _jobs[job_id] = {"status": "done", "result": result}
 
     except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        print(f"[MultiAgent ERROR] job={job_id}: {err}")
         _jobs[job_id] = {"status": "error", "error": str(e)}
 
 
