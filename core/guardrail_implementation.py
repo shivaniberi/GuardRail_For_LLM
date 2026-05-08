@@ -1483,19 +1483,27 @@ class GuardrailSystem:
                     if raw_entities:
                         factual_flags["factual_verdict"] = "raw_llm_entity_not_in_kb_trusted"
                     else:
-                        raw_word_count = len(raw_response.split())
-                        if raw_word_count < 6:
-                            factual_flags["factual_verdict"] = "raw_llm_short_trusted"
+                        # If LLM explicitly refused, trust the refusal — don't replace with KB
+                        refusal_phrases = ["i can't", "i cannot", "i'm unable", "i am unable",
+                                           "i won't", "i will not", "not able to provide",
+                                           "cannot provide", "can't provide", "unable to assist"]
+                        is_refusal = any(p in raw_response.lower() for p in refusal_phrases)
+                        if is_refusal:
+                            factual_flags["factual_verdict"] = "llm_refusal_trusted"
                         else:
-                            kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
-                            kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                                prompt, kb_sentence, ""
-                            )
-                            if kb_on_topic:
-                                result["final_response"] = kb_sentence
-                                factual_flags["factual_verdict"] = "kb_filled_gap"
+                            raw_word_count = len(raw_response.split())
+                            if raw_word_count < 6:
+                                factual_flags["factual_verdict"] = "raw_llm_short_trusted"
                             else:
-                                factual_flags["factual_verdict"] = "raw_llm_unverified"
+                                kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
+                                kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
+                                    prompt, kb_sentence, ""
+                                )
+                                if kb_on_topic:
+                                    result["final_response"] = kb_sentence
+                                    factual_flags["factual_verdict"] = "kb_filled_gap"
+                                else:
+                                    factual_flags["factual_verdict"] = "raw_llm_unverified"
             else:
                 factual_flags["factual_verdict"] = (
                     "kb_irrelevant" if skip_reason == "context_irrelevant" else "no_kb"
