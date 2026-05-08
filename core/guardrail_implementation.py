@@ -1405,27 +1405,23 @@ class GuardrailSystem:
                 "skip_reason":        skip_reason,
             }
 
-            # Only do factual correction when KB is relevant to the query
-            if skip_reason not in ("no_context", "context_irrelevant"):
-                # ── PRIORITY 0: Check FACTUAL_NEGATION_KB first ───────────────
-                # Catches questions whose answer is definitively "this hasn't
-                # happened" regardless of what the LLM or Wikipedia KB says.
-                # e.g. "who was first woman on moon?" → no woman has walked on moon
-                negation_answer = _lookup_factual_negation(prompt)
-                if negation_answer:
-                    # Still run contradiction detection to flag the raw LLM
-                    is_contradictory = _response_is_self_contradictory(raw_response)
-                    result["final_response"] = negation_answer
-                    factual_flags["factual_verdict"] = "negation_kb_answer"
-                    factual_flags["hallucination_detected"] = True
-                    factual_flags["contradiction_type"] = (
-                        "self_contradictory" if is_contradictory else "negation_kb_override"
-                    )
-                    # skip remaining factual checks — negation KB is authoritative
+            # ── PRIORITY 0: FACTUAL_NEGATION_KB — always runs, ignores KB relevance
+            # Authoritative facts (CEO, moon landing, etc.) override LLM regardless
+            # of whether the RAG context is relevant.
+            negation_answer = _lookup_factual_negation(prompt)
+            if negation_answer:
+                is_contradictory = _response_is_self_contradictory(raw_response)
+                result["final_response"] = negation_answer
+                factual_flags["factual_verdict"] = "negation_kb_answer"
+                factual_flags["hallucination_detected"] = True
+                factual_flags["contradiction_type"] = (
+                    "self_contradictory" if is_contradictory else "negation_kb_override"
+                )
+                print(f"[GuardrailDebug] FACTUAL_NEGATION_KB hit → overriding with: {negation_answer[:80]!r}")
 
-                else:
-                    # ── PRIORITY 1+: Normal KB verification flow ──────────────
-                    kb_contradicts, kb_suggested = _kb_contradicts_response(raw_response, context)
+            # Only do remaining factual correction when KB is relevant to the query
+            elif skip_reason not in ("no_context", "context_irrelevant"):
+                kb_contradicts, kb_suggested = _kb_contradicts_response(raw_response, context)
                     raw_entities  = _extract_named_entities(raw_response)
                     context_lower = context.lower()
                     raw_entity_in_kb = bool(raw_entities) and any(
