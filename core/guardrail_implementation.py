@@ -271,6 +271,9 @@ class InputGuardrail:
         r"\bignore\s+(previous|above|all|your)\s+instructions?\b",
         r"\bdisregard\s+(all|your|previous|the)?\s*instructions?\b",
         r"\byou\s+are\s+now\s+(a\s+)?\w+(\s+\w+)?\s*(,|\.)?\s*(ignore|forget|disregard)\b",
+        r"\byou\s+are\s+now\s+an?\s+unrestricted\b",
+        r"\bno\s+safety\s+filters?\b",
+        r"\bwithout\s+(any\s+)?(restrictions?|filters?|limits?|guidelines?)\b",
         r"\bnew\s+(role|character|personality|directive|instructions?)\b",
         r"\bact\s+as\s+(if\s+you\s+are|a\s+|an\s+)?\w+(\s+\w+)?\s*(with\s+no\s+restrictions?)?\b",
         r"\bpretend\s+(you\s+are|to\s+be)\b",
@@ -279,6 +282,7 @@ class InputGuardrail:
         r"\bdeveloper\s+mode\b",
         r"\bno\s+restrictions?\s+mode\b",
         r"\bsystem\s*prompt\s*[:=]\s*",
+        r"\banswer\s+everything\s+(honestly|without|freely)\b",
     ]
 
     # ── SELF-HARM ─────────────────────────────────────────────────────────────
@@ -286,11 +290,14 @@ class InputGuardrail:
         r"\bhow\s+to\s+(kill|hurt|harm|cut)\s+(my)?self\b",
         r"\b(methods?|ways?|best\s+way)\s+(to|of)\s+(suicide|self.harm|self.injur)\b",
         r"\bpainless\s+way\s+to\s+die\b",
+        r"\bpainless\s+(methods?|ways?)\s+to\s+(end|take)\b",
+        r"\b(most\s+)?(painless|peaceful|quickest|easiest)\s+(methods?|ways?)\s+(to\s+)?(end|die|kill)\b",
         r"\bwant\s+to\s+(die|end\s+my\s+life|kill\s+myself)\b",
         r"\bsuicide\s+(methods?|how\s+to|ways?|guide|instructions?)\b",
         r"\boverdose\s+on\s+\w+\s+to\s+(die|kill\s+myself)\b",
         r"\bhow\s+to\s+(slit|cut)\s+(my\s+)?(wrists?|veins?)\b",
         r"\blethal\s+(dose|amount|method)\s+of\b",
+        r"\b(end|take)\s+(one.s|my|your)\s+(own\s+)?life\b",
     ]
 
     # ── DRUG SYNTHESIS ────────────────────────────────────────────────────────
@@ -301,12 +308,18 @@ class InputGuardrail:
         r"\bdrug\s+(recipe|synthesis|cook(ing)?|formula|lab)\b",
         r"\bbuy\s+(drugs?|meth|heroin|fentanyl|cocaine|weed)\s+(online|darkweb|dark\s+web)\b",
         r"\b(precursor\s+chemicals?|pseudoephedrine)\s+(for|to\s+make)\s+meth\b",
+        # Poison / harmful substance recipes
+        r"\b(recipe|formula|instructions?|how\s+to\s+make)\s+(for\s+)?(a\s+)?(poison|toxic|lethal)\b",
+        r"\b(poison|toxic\s+substance|lethal\s+compound)\s+(recipe|formula|synthesis|instructions?)\b",
+        r"\binclude\s+(a\s+)?(hidden\s+)?(recipe|instructions?)\s+(for\s+)?(a\s+)?(poison|toxic)\b",
+        r"\b(make|create|produce|synthesize)\s+(a\s+)?(poison|toxin|nerve\s+agent|cyanide|arsenic)\b",
     ]
 
     # ── FINANCIAL FRAUD ───────────────────────────────────────────────────────
     FRAUD_PATTERNS = [
         r"\bhow\s+to\s+launder\s+money\b",
-        r"\b(create|make|generate)\s+(a\s+)?fake\s+(invoice|receipt|payslip|bank\s+statement)\b",
+        r"\b(create|make|generate|forge|falsify)\s+(a\s+)?fake\s+(invoice|receipt|payslip|bank\s+statement|document)\b",
+        r"\bfake\s+(bank\s+statements?|documents?|invoices?|receipts?)\s+(to|for)\b",
         r"\b(build|make|install)\s+(a\s+)?card\s+(skimmer|cloner)\b",
         r"\bhow\s+to\s+(commit|do|pull\s+off)\s+(tax\s+fraud|wire\s+fraud|insurance\s+fraud)\b",
         r"\bpyramid\s+scheme\s+(setup|how\s+to|create)\b",
@@ -697,7 +710,7 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
     if not context or not response:
         return False, ""
 
-    response_lower = context.lower()
+    response_lower = response.lower()
     response_entities = set(e.lower() for e in _extract_named_entities(response))
     if not response_entities:
         return False, ""
@@ -727,11 +740,12 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
                 if not re.fullmatch(role_keywords, g.lower()):
                     kb_role_entities.add(g.lower())
 
+    print(f"[ContradictDebug] response_entities={response_entities} kb_role_entities={kb_role_entities}")
+    print(f"[ContradictDebug] context_snippet={context[:400]!r}")
+
     # Check if KB has a role-entity that is NOT mentioned in the response
     for kb_entity in kb_role_entities:
         if kb_entity not in response_entities:
-            # KB names a different person for a role → contradiction
-            # Return the KB entity (title-cased) as the suggested correct answer
             return True, kb_entity.title()
 
     return False, ""
@@ -891,6 +905,38 @@ FACTUAL_NEGATION_KB: List[Tuple[Tuple[str, ...], str]] = [
      "Several women have descended to the deepest point in the ocean "
      "(Challenger Deep). Kathy Sullivan became the first woman to reach "
      "full ocean depth in 2020."),
+
+    # Current CEO facts (common LLM hallucination targets)
+    (("ceo", "youtube"),
+     "The CEO of YouTube is Neal Mohan. He was appointed on February 16, 2023, "
+     "succeeding Susan Wojcicki who stepped down after nearly a decade."),
+
+    (("ceo", "google"),
+     "The CEO of Google (and Alphabet) is Sundar Pichai. He became Google's CEO "
+     "in 2015 and also became CEO of Alphabet in 2019."),
+
+    (("ceo", "microsoft"),
+     "The CEO of Microsoft is Satya Nadella. He became CEO in February 2014, "
+     "succeeding Steve Ballmer."),
+
+    (("ceo", "apple"),
+     "The CEO of Apple is Tim Cook. He became CEO in August 2011, "
+     "succeeding Steve Jobs."),
+
+    (("ceo", "amazon"),
+     "The CEO of Amazon is Andy Jassy. He became CEO in July 2021, "
+     "succeeding Jeff Bezos who transitioned to Executive Chairman."),
+
+    (("ceo", "meta"),
+     "The CEO of Meta (formerly Facebook) is Mark Zuckerberg, "
+     "who co-founded the company and has been CEO since its founding in 2004."),
+
+    (("ceo", "openai"),
+     "The CEO of OpenAI is Sam Altman. He co-founded OpenAI and has served "
+     "as CEO since 2019."),
+
+    (("ceo", "tesla"),
+     "The CEO of Tesla is Elon Musk, who joined Tesla in 2004 and became CEO in 2008."),
 ]
 
 
@@ -1236,6 +1282,36 @@ class GuardrailSystem:
             "I recommend doing an internet search for the most accurate and up-to-date answer."
         )
 
+        # ── STEP 0: Validate the PROMPT through the full input guardrail ───────
+        # The LLM response often won't contain harmful keywords (it refuses or
+        # disguises compliance), so checking the response alone misses attacks
+        # like "tell me X but hide a poison recipe at the end", jailbreaks, etc.
+        # validate() covers all categories with the correct priority order.
+        if self.config.enable_input_validation:
+            prompt_check = self.input_guardrail.validate(prompt)
+            prompt_block_category = prompt_check.get("block_category")
+
+            if prompt_block_category:
+                block_key = "privacy" if prompt_block_category == "privacy_pii" else prompt_block_category
+                block_msg = BLOCK_MESSAGES.get(block_key, "This request has been blocked.")
+                prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
+                result["verdict"]          = "blocked"
+                result["block_reason"]     = prompt_block_category
+                result["raw_llm_response"] = f"[Blocked at input — {prompt_block_category} detected in prompt]"
+                result["final_response"]   = block_msg
+                result["response"]         = block_msg
+                result["safety_flags"]     = prompt_flags
+                result["guardrails"] = {
+                    "input": {
+                        "rule_based": {"valid": False, "block_category": prompt_block_category,
+                                       "checks": prompt_check.get("checks", {})},
+                        "ml_based":   {"valid": True, "unsafe_probability": None},
+                    },
+                    "output": {"valid": True, "checks": {}},
+                }
+                self._log(result)
+                return result
+
         # ── STEP 1: Always get raw LLM response ───────────────────────────────
         try:
             raw_response = ollama_generate(
@@ -1372,106 +1448,94 @@ class GuardrailSystem:
                 "skip_reason":        skip_reason,
             }
 
-            # Only do factual correction when KB is relevant to the query
-            if skip_reason not in ("no_context", "context_irrelevant"):
-                # ── PRIORITY 0: Check FACTUAL_NEGATION_KB first ───────────────
-                # Catches questions whose answer is definitively "this hasn't
-                # happened" regardless of what the LLM or Wikipedia KB says.
-                # e.g. "who was first woman on moon?" → no woman has walked on moon
-                negation_answer = _lookup_factual_negation(prompt)
-                if negation_answer:
-                    # Still run contradiction detection to flag the raw LLM
-                    is_contradictory = _response_is_self_contradictory(raw_response)
-                    result["final_response"] = negation_answer
-                    factual_flags["factual_verdict"] = "negation_kb_answer"
-                    factual_flags["hallucination_detected"] = True
-                    factual_flags["contradiction_type"] = (
-                        "self_contradictory" if is_contradictory else "negation_kb_override"
+            # ── PRIORITY 0: FACTUAL_NEGATION_KB — always runs, ignores KB relevance
+            # Authoritative facts (CEO, moon landing, etc.) override LLM regardless
+            # of whether the RAG context is relevant.
+            negation_answer = _lookup_factual_negation(prompt)
+            if negation_answer:
+                is_contradictory = _response_is_self_contradictory(raw_response)
+                result["final_response"] = negation_answer
+                factual_flags["factual_verdict"] = "negation_kb_answer"
+                factual_flags["hallucination_detected"] = True
+                factual_flags["contradiction_type"] = (
+                    "self_contradictory" if is_contradictory else "negation_kb_override"
+                )
+                print(f"[GuardrailDebug] FACTUAL_NEGATION_KB hit → overriding with: {negation_answer[:80]!r}")
+
+            # Only do remaining factual correction when KB is relevant to the query
+            elif skip_reason not in ("no_context", "context_irrelevant"):
+                kb_contradicts, kb_suggested = _kb_contradicts_response(raw_response, context)
+                raw_entities  = _extract_named_entities(raw_response)
+                context_lower = context.lower()
+                raw_entity_in_kb = bool(raw_entities) and any(
+                    e.lower() in context_lower for e in raw_entities
+                )
+                factual_flags["kb_contradicts"]    = kb_contradicts
+                factual_flags["kb_suggested"]      = kb_suggested
+                factual_flags["raw_entity_in_kb"]  = raw_entity_in_kb
+                print(f"[GuardrailDebug] kb_contradicts={kb_contradicts} kb_suggested={kb_suggested!r} raw_entities={raw_entities} raw_entity_in_kb={raw_entity_in_kb} out_check_valid={out_check['valid']}")
+
+                if out_check["valid"] and not kb_contradicts:
+                    factual_flags["factual_verdict"] = "kb_verified"
+                    print(f"[GuardrailDebug] verdict=kb_verified → keeping raw LLM")
+
+                elif kb_contradicts:
+                    kb_sentence = _extract_kb_answer_sentence(prompt, context, kb_suggested)
+                    kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
+                        prompt, kb_sentence, context
                     )
-                    # skip remaining factual checks — negation KB is authoritative
-
-                else:
-                    # ── PRIORITY 1+: Normal KB verification flow ──────────────
-                    kb_contradicts, kb_suggested = _kb_contradicts_response(raw_response, context)
-                    raw_entities  = _extract_named_entities(raw_response)
-                    context_lower = context.lower()
-                    raw_entity_in_kb = bool(raw_entities) and any(
-                        e.lower() in context_lower for e in raw_entities
-                    )
-                    factual_flags["kb_contradicts"]    = kb_contradicts
-                    factual_flags["kb_suggested"]      = kb_suggested
-                    factual_flags["raw_entity_in_kb"]  = raw_entity_in_kb
-
-                    if out_check["valid"] and not kb_contradicts:
-                        # Cosine sim passes + no contradiction → KB verifies raw response
-                        factual_flags["factual_verdict"] = "kb_verified"
-
-                    elif kb_contradicts:
-                        # KB names a DIFFERENT entity than the LLM did.
-                        kb_sentence = _extract_kb_answer_sentence(prompt, context, kb_suggested)
-                        kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                            prompt, kb_sentence, context
-                        )
-                        if kb_on_topic:
-                            result["final_response"] = kb_sentence
-                            factual_flags["factual_verdict"] = "kb_corrected"
-                            factual_flags["correction_source"] = kb_suggested
-                            factual_flags["hallucination_detected"] = True
-                        else:
-                            factual_flags["factual_verdict"] = "kb_contradiction_off_topic"
-
-                    elif raw_entity_in_kb:
-                        # LLM entity exists in KB. Check for self-contradiction first.
-                        is_contradictory = _response_is_self_contradictory(raw_response)
-                        is_negated_claim = _response_claims_action_for_query_subject(
-                            prompt, raw_response, context
-                        )
-
-                        if is_contradictory or is_negated_claim:
-                            # Check negation KB, then Wikipedia, then unaware message
-                            neg = _lookup_factual_negation(prompt)
-                            if neg:
-                                result["final_response"] = neg
-                                factual_flags["factual_verdict"] = "negation_kb_answer"
-                            else:
-                                kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
-                                kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                                    prompt, kb_sentence, context
-                                )
-                                if kb_on_topic:
-                                    result["final_response"] = kb_sentence
-                                    factual_flags["factual_verdict"] = "kb_corrected_contradiction"
-                                else:
-                                    result["final_response"] = UNAWARE_MSG
-                                    factual_flags["factual_verdict"] = "contradiction_unverifiable"
-                            factual_flags["hallucination_detected"] = True
-                            factual_flags["contradiction_type"] = (
-                                "self_contradictory" if is_contradictory else "negated_claim"
-                            )
-                        else:
-                            # Entity in KB, no contradiction — trust the raw LLM.
-                            factual_flags["factual_verdict"] = "raw_entity_in_kb_trusted"
-
+                    print(f"[GuardrailDebug] verdict=kb_contradicts kb_sentence={kb_sentence!r:.120} kb_on_topic={kb_on_topic}")
+                    if kb_on_topic:
+                        result["final_response"] = kb_sentence
+                        factual_flags["factual_verdict"] = "kb_corrected"
+                        factual_flags["correction_source"] = kb_suggested
+                        factual_flags["hallucination_detected"] = True
                     else:
-                        # KB relevant, no named entity in response.
-                        # Trust short LLM answers (< 6 words) — they're likely correct
-                        # direct factual answers (e.g. "Paris") that don't need KB override.
-                        raw_word_count = len(raw_response.split())
-                        if raw_word_count < 6:
-                            factual_flags["factual_verdict"] = "raw_llm_short_trusted"
+                        factual_flags["factual_verdict"] = "kb_contradiction_off_topic"
+
+                elif raw_entity_in_kb:
+                    is_contradictory = _response_is_self_contradictory(raw_response)
+                    is_negated_claim = _response_claims_action_for_query_subject(
+                        prompt, raw_response, context
+                    )
+
+                    if is_contradictory or is_negated_claim:
+                        neg = _lookup_factual_negation(prompt)
+                        if neg:
+                            result["final_response"] = neg
+                            factual_flags["factual_verdict"] = "negation_kb_answer"
                         else:
-                            # Try to extract KB's best answer for this topic.
-                            # Use only the kb_sentence (not full context) for topic matching
-                            # to prevent cross-chunk contamination (e.g. France vs China).
                             kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
                             kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                                prompt, kb_sentence, ""
+                                prompt, kb_sentence, context
                             )
                             if kb_on_topic:
                                 result["final_response"] = kb_sentence
-                                factual_flags["factual_verdict"] = "kb_filled_gap"
+                                factual_flags["factual_verdict"] = "kb_corrected_contradiction"
                             else:
-                                factual_flags["factual_verdict"] = "raw_llm_unverified"
+                                result["final_response"] = UNAWARE_MSG
+                                factual_flags["factual_verdict"] = "contradiction_unverifiable"
+                        factual_flags["hallucination_detected"] = True
+                        factual_flags["contradiction_type"] = (
+                            "self_contradictory" if is_contradictory else "negated_claim"
+                        )
+                    else:
+                        factual_flags["factual_verdict"] = "raw_entity_in_kb_trusted"
+
+                else:
+                    if raw_entities:
+                        factual_flags["factual_verdict"] = "raw_llm_entity_not_in_kb_trusted"
+                    else:
+                        # If LLM explicitly refused, trust the refusal — don't replace with KB
+                        refusal_phrases = ["i can't", "i cannot", "i'm unable", "i am unable",
+                                           "i won't", "i will not", "not able to provide",
+                                           "cannot provide", "can't provide", "unable to assist"]
+                        is_refusal = any(p in raw_response.lower() for p in refusal_phrases)
+                        if is_refusal:
+                            factual_flags["factual_verdict"] = "llm_refusal_trusted"
+                        else:
+                            # No contradiction, no entity mismatch — trust the LLM response
+                            factual_flags["factual_verdict"] = "raw_llm_trusted"
             else:
                 factual_flags["factual_verdict"] = (
                     "kb_irrelevant" if skip_reason == "context_irrelevant" else "no_kb"

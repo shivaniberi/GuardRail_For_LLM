@@ -130,18 +130,17 @@ class ChainOfDebateOrchestrator:
         """Return system prompts for agents depending on role."""
         if role == "proponent":
             return [
-                "You are an advocate. Provide a concise answer and supporting reasons, and cite any assumptions.",
-                "You are an analytic proponent. Give a direct answer, then a short chain-of-thought style justification.",
-                "You are a careful explainer. State your final answer first, then provide the top 2 reasons in bullet points.",
+                "You are an advocate. Answer in 2 sentences max.",
+                "You are an analyst. Give a direct answer in 1-2 sentences.",
             ]
         if role == "critic":
             return [
-                "You are a critic. Identify possible errors, missing evidence, or hallucinations in the provided answers. Be brief and factual.",
-                "You are a skeptic. Provide counter-arguments and point out contradictions or unsupported claims.",
+                "You are a critic. In 1-2 sentences, identify the main flaw in the proposals.",
+                "You are a skeptic. In 1-2 sentences, give the strongest counter-argument.",
             ]
         if role == "judge":
             return [
-                "You are an impartial judge. Given multiple proposals and rebuttals, pick the most supported answer, explain why, and cite any remaining uncertainties. Output JSON: {\"final_answer\":..., \"rationale\":..., \"confidence\":0-1}",
+                'You are a judge. Pick the best answer and output JSON: {"final_answer":"...","rationale":"...","confidence":0.9}',
             ]
         return ["You are a helpful assistant. Answer succinctly."]
 
@@ -195,63 +194,46 @@ class ChainOfDebateOrchestrator:
         # STEP 2 — Create proponent agents
         proponent_prompts = self._build_agent_prompts("proponent")
         proponents: List[AgentBase] = []
-        for i in range(num_agents):
+        for i in range(min(num_agents, 2)):  # cap at 2 agents for speed
             prompt = proponent_prompts[i % len(proponent_prompts)]
             proponents.append(LLMAgent(agent_id=f"proponent_{i+1}", system_prompt=prompt))
 
-        # STEP 3 — Initial proposals (FIX: await directly, no new event loop)
+        # STEP 3 — All agents propose in parallel (single round only for speed)
         proposals = await self._call_agents(
             proponents,
-            f"Question: {question}\nProvide answer and reasoning.",
+            f"Question: {question}\nAnswer in 2 sentences.",
             context=context,
             model_name=model_name,
         )
 
         rounds_data: List[Dict] = []
-        current_statements = [p["content"] for p in proposals]
 
-        # STEP 4 — Rounds of rebuttal
-        for r in range(rounds):
-            critic_prompts = self._build_agent_prompts("critic")
-            critics: List[AgentBase] = []
-            for i in range(num_agents):
-                prom = critic_prompts[i % len(critic_prompts)]
-                critics.append(LLMAgent(agent_id=f"critic_{r+1}_{i+1}", system_prompt=prom))
-
-            instruction = "Given the following proposals, provide concise critiques for each.\n\n"
-            for idx, stmt in enumerate(current_statements, start=1):
-                instruction += f"Proposal {idx}: {stmt}\n\n"
-            instruction += "For each proposal, list up to 2 potential errors, unsupported claims, or required evidence. Be concise."
-
-            rebuttals = await self._call_agents(critics, instruction, context=context, model_name=model_name)
-
-            rounds_data.append({
-                "round": r + 1,
-                "proposals": proposals,
-                "rebuttals": rebuttals,
-            })
-
-            synth_instruction = "Review the rebuttals below and revise/defend your original short answer in 1-2 sentences.\n\n"
-            synth_instruction += "Rebuttals:\n"
-            for rb in rebuttals:
-                synth_instruction += f"- {rb['agent_id']}: {rb['content']}\n"
-
-            proponents_defend = await self._call_agents(proponents, synth_instruction, context=context, model_name=model_name)
-            proposals = proponents_defend
-            current_statements = [p["content"] for p in proposals]
+        # STEP 4 — Single critic pass (one call, not per-agent)
+        critic = LLMAgent(agent_id="critic_1", system_prompt=self._build_agent_prompts("critic")[0])
+        combined = "\n".join(f"Agent {i+1}: {p['content']}" for i, p in enumerate(proposals))
+        rebuttal_result = await critic.run(
+            f"Compare these answers and identify the strongest one in 1-2 sentences:\n{combined}",
+            context=context,
+            model_name=model_name,
+        )
+        rounds_data.append({
+            "round": 1,
+            "proposals": proposals,
+            "rebuttals": [rebuttal_result],
+        })
 
         # STEP 5 — Judge
         judge_prompt = self._build_agent_prompts("judge")[0]
         judge_agent = LLMAgent(agent_id="judge", system_prompt=judge_prompt)
 
-        judge_instruction = "You are the judge. Review the following proposals and rebuttals and produce a final answer. Output strict JSON with keys: final_answer, rationale, confidence (0-1).\n\n"
+        judge_instruction = 'Pick the best proposal. Output JSON: {"final_answer":"...","rationale":"...","confidence":0.9}\n\n'
         judge_instruction += "Proposals:\n"
         for idx, p in enumerate(proposals, start=1):
-            judge_instruction += f"Proposal {idx} ({p['agent_id']}): {p['content']}\n"
-        judge_instruction += "\nAll rebuttals:\n"
-        for rd in rounds_data:
-            for rb in rd["rebuttals"]:
-                judge_instruction += f"{rb['agent_id']}: {rb['content']}\n"
+            judge_instruction += f"{idx}: {p['content'][:300]}\n"
+        if rounds_data:
+            judge_instruction += "\nRebuttals:\n"
+            for rb in rounds_data[-1]["rebuttals"]:
+                judge_instruction += f"- {rb['content'][:200]}\n"
 
         judge_result = await judge_agent.run(judge_instruction, context=context, model_name=model_name)
 
@@ -288,9 +270,10 @@ class ChainOfDebateOrchestrator:
             pass
 
         # STEP 6 — Output guardrail verification
+        final_ans = parsed_judge.get("final_answer", parsed_judge.get("raw", "")) or ""
         output_verification = self.gs.output_guardrail.verify(
             query=question,
-            response=parsed_judge.get("final_answer", parsed_judge.get("raw", "")),
+            response=str(final_ans),
             context=context,
         )
 

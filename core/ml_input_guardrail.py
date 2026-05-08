@@ -80,22 +80,69 @@ class MLInputGuardrail:
         # class order: [safe=0, unsafe=1]
         return float(proba[1]) if len(proba) > 1 else float(proba[0])
 
+    # Uncertain zone: ML score is between these bounds → escalate to LlamaGuard
+    UNCERTAIN_LOW  = 0.20
+    UNCERTAIN_HIGH = 0.50
+
     def validate(self, prompt: str) -> dict:
         if not self._available:
+            # ML model unavailable — go straight to LLM intent judge
+            return self._llm_intent_validate(prompt, ml_prob=None)
+
+        p_unsafe = self.predict_proba_unsafe(prompt)
+
+        # 1. Clearly unsafe — block immediately, no LlamaGuard needed
+        if p_unsafe >= self.threshold:
             return {
-                "valid": True,
-                "unsafe_probability": None,
+                "valid": False,
+                "unsafe_probability": round(p_unsafe, 6),
                 "threshold": self.threshold,
-                "block_category": None,
-                "note": "ml_guardrail_unavailable",
+                "block_category": "ml_unsafe",
+                "classifier": "ml",
             }
 
-        p_unsafe  = self.predict_proba_unsafe(prompt)
-        is_unsafe = p_unsafe >= self.threshold
+        # 2. Uncertain zone — ML not confident, escalate to LLM intent judge
+        if p_unsafe >= self.UNCERTAIN_LOW:
+            return self._llm_intent_validate(prompt, ml_prob=p_unsafe)
 
+        # 3. Clearly safe — pass through
         return {
-            "valid": not is_unsafe,
+            "valid": True,
             "unsafe_probability": round(p_unsafe, 6),
             "threshold": self.threshold,
-            "block_category": "ml_unsafe" if is_unsafe else None,
+            "block_category": None,
+            "classifier": "ml",
         }
+
+    def _llm_intent_validate(self, prompt: str, ml_prob) -> dict:
+        """
+        Escalate to LLM-as-judge for intent-aware classification.
+        Uses the same Groq LLM already in the pipeline — no third-party
+        guardrail product. The LLM is asked a binary safety question.
+        """
+        try:
+            from .ollama_client import _groq_generate
+            system = (
+                "You are a safety classifier. Your only job is to decide if a user message "
+                "is requesting harmful, illegal, or dangerous content. "
+                "Reply with exactly one word: UNSAFE or SAFE. No explanation."
+            )
+            answer = _groq_generate(prompt, system, "llama-3.1-8b-instant", max_tokens=5)
+            is_unsafe = "unsafe" in answer.strip().lower()
+            p = ml_prob if ml_prob is not None else (0.85 if is_unsafe else 0.05)
+            return {
+                "valid": not is_unsafe,
+                "unsafe_probability": round(p, 6),
+                "threshold": self.threshold,
+                "block_category": "ml_unsafe" if is_unsafe else None,
+                "classifier": "llm_judge",
+            }
+        except Exception as e:
+            logger.error(f"LLM intent judge failed: {e}")
+            return {
+                "valid": True,
+                "unsafe_probability": round(ml_prob, 6) if ml_prob else 0.0,
+                "threshold": self.threshold,
+                "block_category": None,
+                "classifier": "fallback_safe",
+            }

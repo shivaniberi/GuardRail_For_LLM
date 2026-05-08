@@ -117,6 +117,23 @@ class FeedbackRequest(BaseModel):
 
 # ── Single-model guardrail ────────────────────────────────────────────────────
 
+def _merge_prompt_flags(prompt: str, response_flags: dict) -> dict:
+    """Merge prompt-level safety flags into the response-level flags.
+    Uses full validate() so all categories are reflected in the UI."""
+    if _system is None:
+        return response_flags
+    try:
+        prompt_check = _system.input_guardrail.validate(prompt)
+        prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
+        merged = dict(response_flags)
+        for k, triggered in prompt_flags.items():
+            if triggered:
+                merged[k] = True
+        return merged
+    except Exception:
+        return response_flags
+
+
 def _run_guardrail(req: PromptRequest):
     if _system is None:
         raise HTTPException(status_code=503, detail="Guardrail system not ready")
@@ -162,18 +179,37 @@ def _run_guardrail(req: PromptRequest):
         "guarded_response": result.get("final_response", ""),
         "verdict":          result.get("verdict", "unknown"),
         "block_reason":     result.get("block_reason"),
+        "metadata": {
+            "rag_used":                result.get("metadata", {}).get("rag_used"),
+            "retrieved_docs_total":    result.get("metadata", {}).get("retrieved_docs_total"),
+            "kb_sources":              result.get("metadata", {}).get("kb_sources"),
+            "ml_unsafe_probability":   ml_unsafe_prob,
+            "ml_prompt_probability":   ml_prompt_prob,
+            "ml_response_probability": ml_response_prob,
+            "classifier":              ml_classifier,
+            "llamaguard_category":     lg_category,
+        },
+        "guardrails": {
+            "output": {
+                "valid": not result.get("factual_flags", {}).get("hallucination_detected", False),
+                "hallucination_similarity": hallucination_sim,
+                "checks": {
+                    "hallucination_similarity": hallucination_sim,
+                },
+            },
+        },
         "input_guardrail": {
             "rule_based": {
                 "valid": not bool(result.get("block_reason")),
                 "block_category": result.get("block_reason"),
             },
             "ml_based": {
-                "valid": result.get("metadata", {}).get("ml_unsafe_probability", 0) < 0.5,
-                "unsafe_probability": result.get("metadata", {}).get("ml_unsafe_probability"),
+                "valid": (ml_unsafe_prob or 0) < 0.5,
+                "unsafe_probability": ml_unsafe_prob,
             },
         },
         "output_guardrail": {
-            "hallucination_similarity": result.get("factual_flags", {}).get("hallucination_sim"),
+            "hallucination_similarity": hallucination_sim,
             "valid": not result.get("factual_flags", {}).get("hallucination_detected", False),
         },
         "rag_metadata": {
@@ -181,7 +217,7 @@ def _run_guardrail(req: PromptRequest):
             "total_docs": result.get("metadata", {}).get("retrieved_docs_total"),
             "kb_sources": result.get("metadata", {}).get("kb_sources"),
         },
-        "safety_flags":  result.get("safety_flags", {}),
+        "safety_flags":  _merge_prompt_flags(req.prompt, result.get("safety_flags", {})),
         "factual_flags": result.get("factual_flags", {}),
     }
 
@@ -411,11 +447,8 @@ async def api_multi_agent_status(job_id: str):
     if job["status"] == "running":
         return {"status": "running"}
     if job["status"] == "error":
-        _jobs.pop(job_id, None)
-        raise HTTPException(status_code=500, detail=job.get("error", "Unknown error"))
-    result = job["result"]
-    _jobs.pop(job_id, None)
-    return result
+        return {"status": "error", "error": job.get("error", "Unknown error")}
+    return job["result"]
 
 
 # ── Sync multi-agent (local use) ─────────────────────────────────────────────

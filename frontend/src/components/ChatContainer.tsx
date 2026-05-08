@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'https://675c-52-55-13-232.ngrok-free.app';
 
 // Strip markdown formatting for display in UI panels
 function stripMarkdown(text: string): string {
@@ -21,23 +21,26 @@ function stripMarkdown(text: string): string {
 function cleanResponse(text: string): string {
   if (!text || text === '—') return text;
 
-  // Cut off at chain-of-thought markers
+  // Strip <think>...</think> blocks (Qwen3/DeepSeek chain-of-thought)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // If the tag was never closed, strip everything from <think> onward
+  text = text.replace(/<think>[\s\S]*/gi, '').trim();
+
+  if (!text) return '—';
+
+  // Cut off only at explicit LLM chain-of-thought section headers
+  // (do NOT cut on generic words like "Reasoning:" or "Justification:" —
+  //  these appear legitimately in medical, legal, and educational responses)
   const cutMarkers = [
-  'Chain-of-thought:',
-  'Chain-of-Thought:',
-  'Chain of thought:',
-  'Chain of Thought:',
-  'Chain-of-thought',   
-  'Chain-of-Thought',   // ← catches capitalized variant
-  'Chain of thought',   // ← catches spaced variant
-  'Chain of Thought',   // ← catches spaced+capitalized
-  '**Reasoning:**',
-  'Reasoning:',
-  '**Justification:**',
-  'Justification:',
-  'Assumptions:',
-  '**Answer:**',
-];
+    'Chain-of-thought:',
+    'Chain-of-Thought:',
+    'Chain of thought:',
+    'Chain of Thought:',
+    'Chain-of-thought',
+    'Chain-of-Thought',
+    'Chain of thought',
+    'Chain of Thought',
+  ];
   let cutAt = text.length;
   for (const marker of cutMarkers) {
     const idx = text.toLowerCase().indexOf(marker.toLowerCase());
@@ -45,19 +48,14 @@ function cleanResponse(text: string): string {
   }
   let cleaned = text.slice(0, cutAt).trim();
 
-  // Remove inline KB context references sentence by sentence
+  // Remove KB internal citation markers injected by the backend
+  // Only remove patterns that are unambiguously system-generated metadata,
+  // never patterns that could appear in real user-facing content
   const removePatterns = [
-    /This can be confirmed from[^.!?]*[.!?]/gi,
-    /This is confirmed (by|from|in)[^.!?]*[.!?]/gi,
-    /According to the (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information)[^.!?]*[.!?]/gi,
-    /The (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information)[^.!?]*(states?|confirms?|says?|mentions?)[^.!?]*[.!?]/gi,
-    /This (directly |clearly )?(answers?|confirms?|establishes?)[^.!?]*(question|context|information)[^.!?]*[.!?]/gi,
-    /Based on the (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information|historical context)[^.!?]*[.!?]/gi,
-    /from the (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information)[^.!?]*[.!?]/gi,
-    /as (stated|mentioned|confirmed|established) in[^.!?]*[.!?]/gi,
-    /explicitly states?:[^.!?]*[.!?]/gi,
     /\(PRIMARY_KB[^)]*\)/gi,
     /\(WIKIPEDIA_KB[^)]*\)/gi,
+    /### PRIMARY_KB\b[^\n]*/gi,
+    /### WIKIPEDIA_KB\b[^\n]*/gi,
   ];
 
   for (const pattern of removePatterns) {
@@ -128,13 +126,14 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
     }
   }
 
-  // ML probability: backend stores in metadata.ml_unsafe_probability
-  const mlProb     = meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
+  // ML probability: prefer input_guardrail (computed per-request), fall back to metadata
+  const mlProb     = result?.input_guardrail?.ml_based?.unsafe_probability ?? meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
   const mlPrompt   = meta?.ml_prompt_probability ?? null;
   const mlResponse = meta?.ml_response_probability ?? null;
+  const classifier = meta?.classifier ?? null;
 
-  // Hallucination: backend stores in guardrails.output.checks.hallucination_similarity
-  const hallSim = out?.checks?.hallucination_similarity ?? null;
+  // Hallucination: check both top-level and nested checks field
+  const hallSim = out?.hallucination_similarity ?? out?.checks?.hallucination_similarity ?? null;
 
   return (
     <div className={`mt-2 rounded-xl border shadow-lg overflow-hidden ${panelBg}`}>
@@ -205,12 +204,15 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
             <div className={`flex justify-between text-xs mt-1 ${cardTitle}`}>
               <span>0% (Safe)</span><span>20% (Threshold)</span><span>100% (Unsafe)</span>
             </div>
-            {(mlPrompt != null || mlResponse != null) && (
-              <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
-                {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
-                {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
-              </div>
-            )}
+            <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
+              {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
+              {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
+              {classifier === 'llm_judge'
+                ? <p className="text-yellow-400 font-semibold">⚡ Escalated to LLM Intent Judge</p>
+                : classifier === 'ml'
+                ? <p className={cardTitle}>Classifier: ML model</p>
+                : null}
+            </div>
           </div>
 
           <div>
@@ -607,7 +609,7 @@ export function ChatContainer() {
         // Step 1: submit job, get job_id immediately
         const submitResp = await fetch(`${API_BASE}/api/multi-agent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
           body: JSON.stringify({ prompt: sentPrompt, model, num_agents: numAgents, rounds }),
         });
         if (submitResp.status === 429) { throw new Error('A debate is already running. Please wait for it to finish before sending another.'); }
@@ -653,7 +655,7 @@ export function ChatContainer() {
       } else {
         const resp = await fetch(`${API_BASE}/api/guardrail`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
           body: JSON.stringify({ prompt: sentPrompt, model }),
           signal: controller.signal,
         });

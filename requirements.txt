@@ -20,3 +20,6 @@ s3fs
 
 # HTTP client (for Ollama)
 requests
+
+# HuggingFace inference
+huggingface_hub
