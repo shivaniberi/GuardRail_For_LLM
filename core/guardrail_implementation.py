@@ -1422,87 +1422,80 @@ class GuardrailSystem:
             # Only do remaining factual correction when KB is relevant to the query
             elif skip_reason not in ("no_context", "context_irrelevant"):
                 kb_contradicts, kb_suggested = _kb_contradicts_response(raw_response, context)
-                    raw_entities  = _extract_named_entities(raw_response)
-                    context_lower = context.lower()
-                    raw_entity_in_kb = bool(raw_entities) and any(
-                        e.lower() in context_lower for e in raw_entities
+                raw_entities  = _extract_named_entities(raw_response)
+                context_lower = context.lower()
+                raw_entity_in_kb = bool(raw_entities) and any(
+                    e.lower() in context_lower for e in raw_entities
+                )
+                factual_flags["kb_contradicts"]    = kb_contradicts
+                factual_flags["kb_suggested"]      = kb_suggested
+                factual_flags["raw_entity_in_kb"]  = raw_entity_in_kb
+                print(f"[GuardrailDebug] kb_contradicts={kb_contradicts} kb_suggested={kb_suggested!r} raw_entities={raw_entities} raw_entity_in_kb={raw_entity_in_kb} out_check_valid={out_check['valid']}")
+
+                if out_check["valid"] and not kb_contradicts:
+                    factual_flags["factual_verdict"] = "kb_verified"
+                    print(f"[GuardrailDebug] verdict=kb_verified → keeping raw LLM")
+
+                elif kb_contradicts:
+                    kb_sentence = _extract_kb_answer_sentence(prompt, context, kb_suggested)
+                    kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
+                        prompt, kb_sentence, context
                     )
-                    factual_flags["kb_contradicts"]    = kb_contradicts
-                    factual_flags["kb_suggested"]      = kb_suggested
-                    factual_flags["raw_entity_in_kb"]  = raw_entity_in_kb
-                    print(f"[GuardrailDebug] kb_contradicts={kb_contradicts} kb_suggested={kb_suggested!r} raw_entities={raw_entities} raw_entity_in_kb={raw_entity_in_kb} out_check_valid={out_check['valid']}")
-
-                    if out_check["valid"] and not kb_contradicts:
-                        factual_flags["factual_verdict"] = "kb_verified"
-                        print(f"[GuardrailDebug] verdict=kb_verified → keeping raw LLM")
-
-                    elif kb_contradicts:
-                        kb_sentence = _extract_kb_answer_sentence(prompt, context, kb_suggested)
-                        kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                            prompt, kb_sentence, context
-                        )
-                        print(f"[GuardrailDebug] verdict=kb_contradicts kb_sentence={kb_sentence!r:.120} kb_on_topic={kb_on_topic}")
-                        if kb_on_topic:
-                            result["final_response"] = kb_sentence
-                            factual_flags["factual_verdict"] = "kb_corrected"
-                            factual_flags["correction_source"] = kb_suggested
-                            factual_flags["hallucination_detected"] = True
-                        else:
-                            factual_flags["factual_verdict"] = "kb_contradiction_off_topic"
-
-                    elif raw_entity_in_kb:
-                        # LLM entity exists in KB. Check for self-contradiction first.
-                        is_contradictory = _response_is_self_contradictory(raw_response)
-                        is_negated_claim = _response_claims_action_for_query_subject(
-                            prompt, raw_response, context
-                        )
-
-                        if is_contradictory or is_negated_claim:
-                            # Check negation KB, then Wikipedia, then unaware message
-                            neg = _lookup_factual_negation(prompt)
-                            if neg:
-                                result["final_response"] = neg
-                                factual_flags["factual_verdict"] = "negation_kb_answer"
-                            else:
-                                kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
-                                kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                                    prompt, kb_sentence, context
-                                )
-                                if kb_on_topic:
-                                    result["final_response"] = kb_sentence
-                                    factual_flags["factual_verdict"] = "kb_corrected_contradiction"
-                                else:
-                                    result["final_response"] = UNAWARE_MSG
-                                    factual_flags["factual_verdict"] = "contradiction_unverifiable"
-                            factual_flags["hallucination_detected"] = True
-                            factual_flags["contradiction_type"] = (
-                                "self_contradictory" if is_contradictory else "negated_claim"
-                            )
-                        else:
-                            # Entity in KB, no contradiction — trust the raw LLM.
-                            factual_flags["factual_verdict"] = "raw_entity_in_kb_trusted"
-
+                    print(f"[GuardrailDebug] verdict=kb_contradicts kb_sentence={kb_sentence!r:.120} kb_on_topic={kb_on_topic}")
+                    if kb_on_topic:
+                        result["final_response"] = kb_sentence
+                        factual_flags["factual_verdict"] = "kb_corrected"
+                        factual_flags["correction_source"] = kb_suggested
+                        factual_flags["hallucination_detected"] = True
                     else:
-                        # KB relevant but LLM entity not found in KB.
-                        # If LLM gave a named entity, trust it — the KB may simply not cover
-                        # the latest facts (e.g. new CEO appointed after KB snapshot).
-                        # Only try KB fill-in when LLM gave NO named entities at all.
-                        if raw_entities:
-                            factual_flags["factual_verdict"] = "raw_llm_entity_not_in_kb_trusted"
+                        factual_flags["factual_verdict"] = "kb_contradiction_off_topic"
+
+                elif raw_entity_in_kb:
+                    is_contradictory = _response_is_self_contradictory(raw_response)
+                    is_negated_claim = _response_claims_action_for_query_subject(
+                        prompt, raw_response, context
+                    )
+
+                    if is_contradictory or is_negated_claim:
+                        neg = _lookup_factual_negation(prompt)
+                        if neg:
+                            result["final_response"] = neg
+                            factual_flags["factual_verdict"] = "negation_kb_answer"
                         else:
-                            raw_word_count = len(raw_response.split())
-                            if raw_word_count < 6:
-                                factual_flags["factual_verdict"] = "raw_llm_short_trusted"
+                            kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
+                            kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
+                                prompt, kb_sentence, context
+                            )
+                            if kb_on_topic:
+                                result["final_response"] = kb_sentence
+                                factual_flags["factual_verdict"] = "kb_corrected_contradiction"
                             else:
-                                kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
-                                kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                                    prompt, kb_sentence, ""
-                                )
-                                if kb_on_topic:
-                                    result["final_response"] = kb_sentence
-                                    factual_flags["factual_verdict"] = "kb_filled_gap"
-                                else:
-                                    factual_flags["factual_verdict"] = "raw_llm_unverified"
+                                result["final_response"] = UNAWARE_MSG
+                                factual_flags["factual_verdict"] = "contradiction_unverifiable"
+                        factual_flags["hallucination_detected"] = True
+                        factual_flags["contradiction_type"] = (
+                            "self_contradictory" if is_contradictory else "negated_claim"
+                        )
+                    else:
+                        factual_flags["factual_verdict"] = "raw_entity_in_kb_trusted"
+
+                else:
+                    if raw_entities:
+                        factual_flags["factual_verdict"] = "raw_llm_entity_not_in_kb_trusted"
+                    else:
+                        raw_word_count = len(raw_response.split())
+                        if raw_word_count < 6:
+                            factual_flags["factual_verdict"] = "raw_llm_short_trusted"
+                        else:
+                            kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
+                            kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
+                                prompt, kb_sentence, ""
+                            )
+                            if kb_on_topic:
+                                result["final_response"] = kb_sentence
+                                factual_flags["factual_verdict"] = "kb_filled_gap"
+                            else:
+                                factual_flags["factual_verdict"] = "raw_llm_unverified"
             else:
                 factual_flags["factual_verdict"] = (
                     "kb_irrelevant" if skip_reason == "context_irrelevant" else "no_kb"
