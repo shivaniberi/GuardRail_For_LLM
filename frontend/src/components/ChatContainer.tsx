@@ -606,7 +606,7 @@ export function ChatContainer() {
       let data: any;
 
       if (mode === 'multi') {
-        // Step 1: submit job, get job_id immediately (avoids ngrok 40s timeout)
+        // Step 1: submit job, get job_id immediately
         const submitResp = await fetch(`${API_BASE}/api/multi-agent`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
@@ -616,12 +616,12 @@ export function ChatContainer() {
         if (!submitResp.ok) { const t = await submitResp.text().catch(() => submitResp.statusText); throw new Error(`Server ${submitResp.status}: ${t}`); }
         const { job_id } = await submitResp.json();
 
-        // Step 2: poll every 5s until done (up to 10 minutes)
+        // Step 2: poll until done (every 5s, up to 10 minutes)
         const maxAttempts = 120;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           await new Promise(r => setTimeout(r, 5000));
           if (controller.signal.aborted) throw new Error('Cancelled');
-          const pollResp = await fetch(`${API_BASE}/api/multi-agent/status/${job_id}`, { headers: { 'ngrok-skip-browser-warning': '1' } });
+          const pollResp = await fetch(`${API_BASE}/api/multi-agent/status/${job_id}`);
           if (!pollResp.ok) { const t = await pollResp.text().catch(() => pollResp.statusText); throw new Error(`Server ${pollResp.status}: ${t}`); }
           const pollData = await pollResp.json();
           if (pollData.status === 'running') continue;

@@ -2,23 +2,25 @@
 GuardRail FastAPI Server
 ========================
 Endpoints:
-  POST /api/guardrail   — single-model guardrail query (used by frontend)
-  POST /api/multi-agent — multi-agent debate query (used by frontend)
-  POST /api/feedback    — human feedback (thumbs up/down + correction)
-  POST /query           — alias for /api/guardrail
-  GET  /health          — liveness check
-  GET  /models          — list supported Ollama model keys
+  POST /api/guardrail          — single-model guardrail query (used by frontend)
+  POST /api/multi-agent        — multi-agent debate query (async, returns job_id)
+  GET  /api/multi-agent/status/{job_id} — poll for debate result
+  POST /api/multi-agent-sync   — sync fallback (local use)
+  POST /api/feedback           — human feedback (thumbs up/down + correction)
+  POST /query                  — alias for /api/guardrail
+  GET  /health                 — liveness check
+  GET  /models                 — list supported Ollama model keys
 """
 
 import os
-import pandas as pd
-import numpy as np
-from datetime import datetime
-from pathlib import Path
 import re
 import uuid
 import asyncio
 import threading
+import pandas as pd
+import numpy as np
+from datetime import datetime
+from pathlib import Path
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
@@ -105,13 +107,12 @@ class MultiAgentRequest(BaseModel):
     rounds: int = 1
 
 
-# ── NEW: Human feedback model ─────────────────────────────────────────────────
+# ── Human feedback model ──────────────────────────────────────────────────────
 class FeedbackRequest(BaseModel):
     prompt: str
     response: str
     rating: int          # 1 = thumbs up, -1 = thumbs down
     correction: str = "" # user's correct answer (optional)
-# ── END NEW ───────────────────────────────────────────────────────────────────
 
 
 # ── Single-model guardrail ────────────────────────────────────────────────────
@@ -141,7 +142,7 @@ def _run_guardrail(req: PromptRequest):
 
     _system.config.ollama_model_name = req.model
 
-    # ── NEW: Check reflexion memory for human corrections ─────────────────────
+    # Check reflexion memory for human corrections
     human_correction_found = False
     human_correction = ""
     try:
@@ -158,7 +159,6 @@ def _run_guardrail(req: PromptRequest):
             prompt_to_use = req.prompt
     except Exception:
         prompt_to_use = req.prompt
-    # ── END NEW ───────────────────────────────────────────────────────────────
 
     result = _system.generate_with_guardrails(
         prompt=prompt_to_use,
@@ -166,42 +166,11 @@ def _run_guardrail(req: PromptRequest):
         use_rag=req.use_rag,
     )
 
+    # If human correction exists, override final response
     if human_correction_found:
         result["final_response"] = human_correction
         result["response"] = human_correction
         result["guarded_response"] = human_correction
-
-    final_text = result.get("final_response", "") or result.get("response", "") or ""
-
-    # ML score for prompt (also captures classifier type and llamaguard category)
-    ml_prompt_prob = result.get("metadata", {}).get("ml_unsafe_probability")
-    ml_classifier = None
-    lg_category = None
-    if ml_prompt_prob is None:
-        try:
-            ml_in = _system.ml_input_guardrail.validate(req.prompt)
-            ml_prompt_prob = ml_in.get("unsafe_probability")
-            ml_classifier  = ml_in.get("classifier")
-            lg_category    = ml_in.get("llamaguard_category")
-        except Exception:
-            ml_prompt_prob = None
-
-    # ML score for response
-    ml_response_prob = None
-    if final_text:
-        try:
-            ml_out = _system.ml_input_guardrail.validate(final_text)
-            ml_response_prob = ml_out.get("unsafe_probability")
-        except Exception:
-            ml_response_prob = None
-
-    candidates = [v for v in [ml_prompt_prob, ml_response_prob] if v is not None]
-    ml_unsafe_prob = max(candidates) if candidates else None
-
-    hallucination_sim = (
-        result.get("factual_flags", {}).get("hallucination_sim")
-        or result.get("metadata", {}).get("hallucination_similarity")
-    )
 
     return {
         "raw_llm_response": result.get("raw_llm_response", ""),
@@ -214,7 +183,7 @@ def _run_guardrail(req: PromptRequest):
             "rag_used":                result.get("metadata", {}).get("rag_used"),
             "retrieved_docs_total":    result.get("metadata", {}).get("retrieved_docs_total"),
             "kb_sources":              result.get("metadata", {}).get("kb_sources"),
-            "ml_unsafe_probability":   ml_unsafe_prob,
+            "ml_unsafe_probability":   result.get("metadata", {}).get("ml_unsafe_probability"),
             "ml_prompt_probability":   ml_prompt_prob,
             "ml_response_probability": ml_response_prob,
             "classifier":              ml_classifier,
@@ -256,7 +225,6 @@ def _run_guardrail(req: PromptRequest):
 # ── Multi-agent helpers ───────────────────────────────────────────────────────
 
 def _extract_best_proposal(rounds: list) -> str:
-    """Extract the best answer from the last round's proposals."""
     if not rounds:
         return ""
     last_round = rounds[-1] or {}
@@ -267,7 +235,6 @@ def _extract_best_proposal(rounds: list) -> str:
 
 
 def _is_clean_answer(text: str) -> bool:
-    """Return False if text looks like critic/judge noise rather than a real answer."""
     if not text:
         return False
     noise_patterns = [
@@ -287,7 +254,6 @@ def _is_clean_answer(text: str) -> bool:
 
 
 def _apply_kb_correction(question: str, answer: str, context: str) -> str:
-    """Use KB contradiction detection to correct hallucinations."""
     if not context or not answer:
         return answer
     try:
@@ -314,6 +280,87 @@ def _apply_kb_correction(question: str, answer: str, context: str) -> str:
     return answer
 
 
+def _build_debate_result(result: dict, req: MultiAgentRequest, context: str = "", ctx_meta: dict = None) -> dict:
+    """Shared post-processing for debate results — used by both sync and async paths."""
+    ctx_meta = ctx_meta or {}
+
+    judge = result.get("judge", {}) or {}
+    final_answer = judge.get("final_answer", "") or ""
+
+    if not final_answer or not _is_clean_answer(final_answer):
+        fallback = _extract_best_proposal(result.get("rounds", []))
+        if fallback:
+            final_answer = fallback
+            result["judge"]["final_answer"] = fallback
+            result["judge"]["source"] = "proposal_fallback"
+
+    if context and final_answer:
+        corrected = _apply_kb_correction(req.prompt, final_answer, context)
+        if corrected != final_answer:
+            result["judge"]["final_answer"] = corrected
+            result["judge"]["kb_corrected"] = True
+            final_answer = corrected
+
+    primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
+    wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
+    kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
+
+    result["rag_metadata"] = {
+        "rag_used":   bool(primary_count + wiki_count > 0),
+        "total_docs": primary_count + wiki_count,
+        "kb_sources": kb_sources,
+    }
+
+    result["evaluation"] = {
+        "raw_llm_response": result.get("judge", {}).get("raw", ""),
+        "final_response":   final_answer,
+        "verdict":          "safe",
+        "block_reason":     None,
+        "safety_flags":     {},
+        "factual_flags":    {},
+        "metadata": {
+            "rag_used":                bool(primary_count + wiki_count > 0),
+            "retrieved_docs_total":    primary_count + wiki_count,
+            "kb_sources":              kb_sources,
+            "ml_unsafe_probability":   None,
+            "ml_prompt_probability":   None,
+            "ml_response_probability": None,
+        },
+        "guardrails": {
+            "output": {
+                "valid": True,
+                "checks": {
+                    "hallucination_similarity": (
+                        result.get("output_verification", {})
+                              .get("checks", {})
+                              .get("hallucination_similarity")
+                    ),
+                    "context_relevance": (
+                        result.get("output_verification", {})
+                              .get("checks", {})
+                              .get("context_relevance")
+                    ),
+                    "skipped_reason":        None,
+                    "privacy_leak_detected": False,
+                }
+            }
+        }
+    }
+
+    result["debate_rounds"] = result.get("rounds", [])
+    rounds = result.get("rounds", [])
+    first_proposal = ""
+    if rounds and rounds[0].get("proposals"):
+        first_proposal = rounds[0]["proposals"][0].get("content", "")
+
+    result["raw_llm_response"] = first_proposal
+    result["evaluation"]["raw_llm_response"] = first_proposal
+
+    return result
+
+
+# ── Async debate job (runs in background thread for cloud/ngrok) ──────────────
+
 def _run_debate_job(job_id: str, req: MultiAgentRequest):
     """Runs debate in a background thread and stores result in _jobs."""
     try:
@@ -326,136 +373,21 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
             rounds=req.rounds,
             model_name=req.model,
         ))
-        loop.close()
 
         context = ""
         ctx_meta = {}
         try:
-            rag = _system.rag_retriever
-            if rag:
-                docs = rag.retrieve(req.prompt, k=3)
-                context = " ".join([d if isinstance(d, str) else d.get("text", "") for d in docs]) if docs else ""
-                ctx_meta = {"primary_count": len(docs), "wiki_count": 0}
+            context, ctx_meta = orchestrator._retrieve_context(req.prompt)
+            context = context or ""
         except Exception:
             pass
 
-        if not result.get("judge"):
-            result["judge"] = {}
-        judge = result["judge"]
-        final_answer = judge.get("final_answer", "") or ""
-        print(f"[MultiAgent DEBUG] job={job_id} judge.final_answer={repr(final_answer[:200])}")
-        print(f"[MultiAgent DEBUG] job={job_id} judge.raw={repr((judge.get('raw','') or '')[:200])}")
+        loop.close()
 
-        # Always fallback to best proposal if final_answer is empty or noisy
-        if not final_answer or not _is_clean_answer(final_answer) or len(final_answer.strip()) < 5:
-            fallback = _extract_best_proposal(result.get("rounds", []))
-            if fallback:
-                final_answer = fallback
-                result["judge"]["final_answer"] = fallback
-                result["judge"]["source"] = "proposal_fallback"
-
-        # Last resort: use raw judge output
-        if not final_answer or len(final_answer.strip()) < 5:
-            final_answer = judge.get("raw", "") or ""
-            result["judge"]["final_answer"] = final_answer
-
-        # If final_answer is still JSON, extract the text field from it
-        if final_answer and final_answer.strip().startswith("{"):
-            try:
-                import json as _json
-                parsed = _json.loads(final_answer)
-                extracted = parsed.get("final_answer") or parsed.get("answer") or parsed.get("response") or ""
-                if extracted and isinstance(extracted, str) and len(extracted.strip()) >= 5:
-                    final_answer = extracted
-                    result["judge"]["final_answer"] = final_answer
-            except Exception:
-                pass
-
-        # Ultimate fallback: use ANY proposal content that is non-empty
-        if not final_answer or len(final_answer.strip()) < 5 or final_answer.strip().startswith("{"):
-            for rnd in result.get("rounds", []):
-                for prop in rnd.get("proposals", []):
-                    c = prop.get("content", "") or ""
-                    if c and len(c.strip()) >= 5 and not c.strip().startswith("{"):
-                        final_answer = c
-                        result["judge"]["final_answer"] = c
-                        result["judge"]["source"] = "proposal_ultimate_fallback"
-                        break
-                if final_answer and len(final_answer.strip()) >= 5 and not final_answer.strip().startswith("{"):
-                    break
-
-        # Check FACTUAL_NEGATION_KB — always overrides LLM regardless of KB relevance
-        try:
-            from core.guardrail_implementation import _lookup_factual_negation
-            negation = _lookup_factual_negation(req.prompt)
-            if negation:
-                final_answer = negation
-                result["judge"]["final_answer"] = negation
-                result["judge"]["source"] = "factual_negation_kb"
-                print(f"[MultiAgent] FACTUAL_NEGATION_KB override: {negation[:80]!r}")
-        except Exception:
-            pass
-
-        # ML guardrail on the final answer
-        ml_unsafe_prob = None
-        if final_answer and _system is not None:
-            try:
-                ml_result = _system.ml_input_guardrail.validate(final_answer)
-                ml_unsafe_prob = ml_result.get("unsafe_probability")
-            except Exception:
-                pass
-
-        primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
-        wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
-        kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
-
-        result["rag_metadata"] = {
-            "rag_used":   bool(primary_count + wiki_count > 0),
-            "total_docs": primary_count + wiki_count,
-            "kb_sources": kb_sources,
-        }
-        result["evaluation"] = {
-            "raw_llm_response": result.get("judge", {}).get("raw", ""),
-            "final_response":   final_answer,
-            "verdict":          "safe",
-            "block_reason":     None,
-            "safety_flags":     {},
-            "factual_flags":    {},
-            "metadata": {
-                "rag_used":                bool(primary_count + wiki_count > 0),
-                "retrieved_docs_total":    primary_count + wiki_count,
-                "kb_sources":              kb_sources,
-                "ml_unsafe_probability":   ml_unsafe_prob,
-                "ml_prompt_probability":   None,
-                "ml_response_probability": None,
-            },
-            "guardrails": {
-                "output": {
-                    "valid": True,
-                    "checks": {
-                        "hallucination_similarity": None,
-                        "context_relevance": None,
-                        "skipped_reason": None,
-                        "privacy_leak_detected": False,
-                    }
-                }
-            }
-        }
-        result["debate_rounds"] = result.get("rounds", [])
-        rounds = result.get("rounds", [])
-        first_proposal = ""
-        if rounds and rounds[0].get("proposals"):
-            first_proposal = rounds[0]["proposals"][0].get("content", "")
-        result["raw_llm_response"] = first_proposal
-        result["evaluation"]["raw_llm_response"] = first_proposal
-
-        print(f"[MultiAgent DEBUG] job={job_id} FINAL stored final_answer={repr(final_answer[:200])}")
+        result = _build_debate_result(result, req, context, ctx_meta)
         _jobs[job_id] = {"status": "done", "result": result}
 
     except Exception as e:
-        import traceback
-        err = traceback.format_exc()
-        print(f"[MultiAgent ERROR] job={job_id}: {err}")
         _jobs[job_id] = {"status": "error", "error": str(e)}
 
 
@@ -471,7 +403,6 @@ async def query(req: PromptRequest):
     return _run_guardrail(req)
 
 
-# ── NEW: Human feedback endpoint ──────────────────────────────────────────────
 @app.post("/api/feedback")
 async def api_feedback(req: FeedbackRequest):
     try:
@@ -480,9 +411,9 @@ async def api_feedback(req: FeedbackRequest):
         return {"status": "saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save feedback: {e}")
-# ── END NEW ───────────────────────────────────────────────────────────────────
 
 
+# ── Async multi-agent (cloud-safe, no timeout) ────────────────────────────────
 @app.post("/api/multi-agent")
 async def api_multi_agent(req: MultiAgentRequest):
     global _debate_busy
@@ -520,7 +451,7 @@ async def api_multi_agent_status(job_id: str):
     return job["result"]
 
 
-# Legacy sync endpoint kept for backward compatibility
+# ── Sync multi-agent (local use) ─────────────────────────────────────────────
 @app.post("/api/multi-agent-sync")
 async def api_multi_agent_sync(req: MultiAgentRequest):
     global _debate_busy
@@ -539,9 +470,6 @@ async def api_multi_agent_sync(req: MultiAgentRequest):
             model_name=req.model,
         )
 
-        # ── Post-processing ───────────────────────────────────────────────────
-
-        # 1. Get RAG context for KB correction
         context = ""
         ctx_meta = {}
         try:
@@ -550,78 +478,7 @@ async def api_multi_agent_sync(req: MultiAgentRequest):
         except Exception:
             pass
 
-        # 2. Get judge final_answer
-        judge = result.get("judge", {}) or {}
-        final_answer = judge.get("final_answer", "") or ""
-
-        # 3. Fallback to best proposal if judge output is noisy/garbage
-        if not final_answer or not _is_clean_answer(final_answer):
-            fallback = _extract_best_proposal(result.get("rounds", []))
-            if fallback:
-                final_answer = fallback
-                result["judge"]["final_answer"] = fallback
-                result["judge"]["source"] = "proposal_fallback"
-
-        # 4. Build RAG metadata
-        primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
-        wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
-        kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
-
-        result["rag_metadata"] = {
-            "rag_used":   bool(primary_count + wiki_count > 0),
-            "total_docs": primary_count + wiki_count,
-            "kb_sources": kb_sources,
-        }
-
-        # 6. Build evaluation wrapper — this is what the frontend reads
-        result["evaluation"] = {
-            "raw_llm_response": result.get("judge", {}).get("raw", ""),
-            "final_response":   final_answer,
-            "verdict":          "safe",
-            "block_reason":     None,
-            "safety_flags":     {},
-            "factual_flags":    {},
-            "metadata": {
-                "rag_used":                bool(primary_count + wiki_count > 0),
-                "retrieved_docs_total":    primary_count + wiki_count,
-                "kb_sources":              kb_sources,
-                "ml_unsafe_probability":   None,
-                "ml_prompt_probability":   None,
-                "ml_response_probability": None,
-            },
-            "guardrails": {
-                "output": {
-                    "valid": True,
-                    "checks": {
-                        "hallucination_similarity": (
-                            result.get("output_verification", {})
-                                  .get("checks", {})
-                                  .get("hallucination_similarity")
-                        ),
-                        "context_relevance": (
-                            result.get("output_verification", {})
-                                  .get("checks", {})
-                                  .get("context_relevance")
-                        ),
-                        "skipped_reason":        None,
-                        "privacy_leak_detected": False,
-                    }
-                }
-            }
-        }
-
-        # 7. Add debate_rounds so frontend shows agent/round count
-        result["debate_rounds"] = result.get("rounds", [])
-
-        # 8. Top-level raw_llm_response = first agent's raw answer (before guardrail)
-        rounds = result.get("rounds", [])
-        first_proposal = ""
-        if rounds and rounds[0].get("proposals"):
-            first_proposal = rounds[0]["proposals"][0].get("content", "")
-
-        result["raw_llm_response"] = first_proposal
-        result["evaluation"]["raw_llm_response"] = first_proposal
-
+        result = _build_debate_result(result, req, context, ctx_meta)
         return result
 
     finally:
