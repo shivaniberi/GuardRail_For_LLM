@@ -621,7 +621,7 @@ export function ChatContainer() {
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           await new Promise(r => setTimeout(r, 5000));
           if (controller.signal.aborted) throw new Error('Cancelled');
-          const pollResp = await fetch(`${API_BASE}/api/multi-agent/status/${job_id}`);
+          const pollResp = await fetch(`${API_BASE}/api/multi-agent/status/${job_id}`, { headers: { 'ngrok-skip-browser-warning': '1' } });
           if (!pollResp.ok) { const t = await pollResp.text().catch(() => pollResp.statusText); throw new Error(`Server ${pollResp.status}: ${t}`); }
           const pollData = await pollResp.json();
           if (pollData.status === 'running') continue;
