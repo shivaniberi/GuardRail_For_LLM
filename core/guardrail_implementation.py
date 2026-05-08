@@ -1324,9 +1324,9 @@ class GuardrailSystem:
                 prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
                 # Always get ML probability even when rule-based already blocked
                 ml_prob = prompt_check.get("unsafe_probability")
-                if ml_prob is None and self.input_guardrail is not None:
+                if ml_prob is None and self.ml_input_guardrail is not None:
                     try:
-                        ml_prob = self.input_guardrail.predict_proba_unsafe(prompt)
+                        ml_prob = self.ml_input_guardrail.predict_proba_unsafe(prompt)
                     except Exception:
                         ml_prob = None
                 result["verdict"]          = "blocked"
