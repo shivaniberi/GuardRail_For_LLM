@@ -173,12 +173,16 @@ def _run_guardrail(req: PromptRequest):
 
     final_text = result.get("final_response", "") or result.get("response", "") or ""
 
-    # ML score for prompt
+    # ML score for prompt (also captures classifier type and llamaguard category)
     ml_prompt_prob = result.get("metadata", {}).get("ml_unsafe_probability")
+    ml_classifier = None
+    lg_category = None
     if ml_prompt_prob is None:
         try:
             ml_in = _system.ml_input_guardrail.validate(req.prompt)
             ml_prompt_prob = ml_in.get("unsafe_probability")
+            ml_classifier  = ml_in.get("classifier")
+            lg_category    = ml_in.get("llamaguard_category")
         except Exception:
             ml_prompt_prob = None
 
@@ -213,6 +217,8 @@ def _run_guardrail(req: PromptRequest):
             "ml_unsafe_probability":   ml_unsafe_prob,
             "ml_prompt_probability":   ml_prompt_prob,
             "ml_response_probability": ml_response_prob,
+            "classifier":              ml_classifier,
+            "llamaguard_category":     lg_category,
         },
         "guardrails": {
             "output": {

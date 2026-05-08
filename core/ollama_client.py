@@ -35,6 +35,75 @@ def _strip_think_tags(text: str) -> str:
 
 OLLAMA_HOST = "http://localhost:11434"
 
+# ── LlamaGuard 3 via Groq ─────────────────────────────────────────────────────
+
+LLAMAGUARD_CATEGORIES = {
+    "S1": "violent_crimes",
+    "S2": "non_violent_crimes",
+    "S3": "sex_related_crimes",
+    "S4": "child_sexual_exploitation",
+    "S5": "defamation",
+    "S6": "specialized_advice",
+    "S7": "privacy",
+    "S8": "intellectual_property",
+    "S9": "indiscriminate_weapons",
+    "S10": "hate",
+    "S11": "suicide_self_harm",
+    "S12": "sexual_content",
+    "S13": "elections",
+    "S14": "code_interpreter_abuse",
+}
+
+# Map LlamaGuard categories to our internal block categories
+_LG_TO_INTERNAL = {
+    "S1":  "violence_illegal",
+    "S2":  "violence_illegal",
+    "S3":  "violence_illegal",
+    "S4":  "violence_illegal",
+    "S7":  "privacy",
+    "S9":  "drug_synthesis",
+    "S10": "hate",
+    "S11": "self_harm",
+    "S14": "prompt_injection",
+}
+
+
+def llamaguard_check(prompt: str) -> dict:
+    """
+    Call LlamaGuard 3 on Groq to classify prompt intent.
+    Returns {"safe": bool, "category": str|None, "block_category": str|None, "raw": str}
+
+    Only called when ML classifier is in the uncertain zone (0.2–0.5).
+    Falls back gracefully — never raises, always returns a result.
+    """
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        return {"safe": True, "category": None, "block_category": None, "raw": "no_groq_key"}
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": "meta-llama/llama-guard-3-8b",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 20,
+        "temperature": 0.0,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+        # LlamaGuard output: "safe" or "unsafe\nS1" etc.
+        if raw.lower().startswith("unsafe"):
+            lines = raw.strip().splitlines()
+            lg_cat = lines[1].strip() if len(lines) > 1 else ""
+            block_category = _LG_TO_INTERNAL.get(lg_cat, "violence_illegal")
+            return {"safe": False, "category": lg_cat, "block_category": block_category, "raw": raw}
+        return {"safe": True, "category": None, "block_category": None, "raw": raw}
+    except Exception as e:
+        print(f"[LlamaGuard] Error: {e} — defaulting to safe")
+        return {"safe": True, "category": None, "block_category": None, "raw": f"error:{e}"}
+
 # Groq model IDs (fast, free tier, 30 req/min)
 # Only models actually available on Groq — mistral/phi3/gemma fall through to HF/Ollama
 GROQ_MODELS = {

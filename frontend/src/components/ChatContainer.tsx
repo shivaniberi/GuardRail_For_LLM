@@ -130,6 +130,8 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
   const mlProb     = result?.input_guardrail?.ml_based?.unsafe_probability ?? meta?.ml_unsafe_probability ?? result?.guardrails?.input?.ml_based?.unsafe_probability ?? null;
   const mlPrompt   = meta?.ml_prompt_probability ?? null;
   const mlResponse = meta?.ml_response_probability ?? null;
+  const classifier = meta?.classifier ?? null;
+  const lgCategory = meta?.llamaguard_category ?? null;
 
   // Hallucination: check both top-level and nested checks field
   const hallSim = out?.hallucination_similarity ?? out?.checks?.hallucination_similarity ?? null;
@@ -203,12 +205,15 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
             <div className={`flex justify-between text-xs mt-1 ${cardTitle}`}>
               <span>0% (Safe)</span><span>20% (Threshold)</span><span>100% (Unsafe)</span>
             </div>
-            {(mlPrompt != null || mlResponse != null) && (
-              <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
-                {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
-                {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
-              </div>
-            )}
+            <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
+              {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
+              {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
+              {classifier === 'llamaguard'
+                ? <p className="text-yellow-400 font-semibold">⚡ Escalated to LlamaGuard 3{lgCategory ? ` — ${lgCategory}` : ''}</p>
+                : classifier === 'ml'
+                ? <p className={cardTitle}>Classifier: ML model</p>
+                : null}
+            </div>
           </div>
 
           <div>

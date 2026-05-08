@@ -80,22 +80,62 @@ class MLInputGuardrail:
         # class order: [safe=0, unsafe=1]
         return float(proba[1]) if len(proba) > 1 else float(proba[0])
 
+    # Uncertain zone: ML score is between these bounds → escalate to LlamaGuard
+    UNCERTAIN_LOW  = 0.20
+    UNCERTAIN_HIGH = 0.50
+
     def validate(self, prompt: str) -> dict:
         if not self._available:
+            # ML model unavailable — go straight to LlamaGuard
+            return self._llamaguard_validate(prompt, ml_prob=None)
+
+        p_unsafe = self.predict_proba_unsafe(prompt)
+
+        # 1. Clearly unsafe — block immediately, no LlamaGuard needed
+        if p_unsafe >= self.threshold:
             return {
-                "valid": True,
-                "unsafe_probability": None,
+                "valid": False,
+                "unsafe_probability": round(p_unsafe, 6),
                 "threshold": self.threshold,
-                "block_category": None,
-                "note": "ml_guardrail_unavailable",
+                "block_category": "ml_unsafe",
+                "classifier": "ml",
             }
 
-        p_unsafe  = self.predict_proba_unsafe(prompt)
-        is_unsafe = p_unsafe >= self.threshold
+        # 2. Uncertain zone — ML not confident, escalate to LlamaGuard
+        if p_unsafe >= self.UNCERTAIN_LOW:
+            return self._llamaguard_validate(prompt, ml_prob=p_unsafe)
 
+        # 3. Clearly safe — pass through
         return {
-            "valid": not is_unsafe,
+            "valid": True,
             "unsafe_probability": round(p_unsafe, 6),
             "threshold": self.threshold,
-            "block_category": "ml_unsafe" if is_unsafe else None,
+            "block_category": None,
+            "classifier": "ml",
         }
+
+    def _llamaguard_validate(self, prompt: str, ml_prob) -> dict:
+        """Escalate to LlamaGuard 3 on Groq for intent-aware classification."""
+        try:
+            from .ollama_client import llamaguard_check
+            lg = llamaguard_check(prompt)
+            is_unsafe = not lg["safe"]
+            p = ml_prob if ml_prob is not None else (0.9 if is_unsafe else 0.0)
+            return {
+                "valid": not is_unsafe,
+                "unsafe_probability": round(p, 6),
+                "threshold": self.threshold,
+                "block_category": lg["block_category"] if is_unsafe else None,
+                "classifier": "llamaguard",
+                "llamaguard_category": lg.get("category"),
+            }
+        except Exception as e:
+            logger.error(f"LlamaGuard fallback failed: {e}")
+            # If LlamaGuard also fails, default to safe (avoid blocking legitimate requests)
+            return {
+                "valid": True,
+                "unsafe_probability": round(ml_prob, 6) if ml_prob else 0.0,
+                "threshold": self.threshold,
+                "block_category": None,
+                "classifier": "fallback_safe",
+            }
