@@ -275,6 +275,8 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
 
         judge = result.get("judge", {}) or {}
         final_answer = judge.get("final_answer", "") or ""
+        print(f"[MultiAgent DEBUG] job={job_id} judge.final_answer={repr(final_answer[:200])}")
+        print(f"[MultiAgent DEBUG] job={job_id} judge.raw={repr((judge.get('raw','') or '')[:200])}")
 
         # Always fallback to best proposal if final_answer is empty or noisy
         if not final_answer or not _is_clean_answer(final_answer) or len(final_answer.strip()) < 5:
@@ -288,6 +290,31 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
         if not final_answer or len(final_answer.strip()) < 5:
             final_answer = judge.get("raw", "") or ""
             result["judge"]["final_answer"] = final_answer
+
+        # If final_answer is still JSON, extract the text field from it
+        if final_answer and final_answer.strip().startswith("{"):
+            try:
+                import json as _json
+                parsed = _json.loads(final_answer)
+                extracted = parsed.get("final_answer") or parsed.get("answer") or parsed.get("response") or ""
+                if extracted and isinstance(extracted, str) and len(extracted.strip()) >= 5:
+                    final_answer = extracted
+                    result["judge"]["final_answer"] = final_answer
+            except Exception:
+                pass
+
+        # Ultimate fallback: use ANY proposal content that is non-empty
+        if not final_answer or len(final_answer.strip()) < 5 or final_answer.strip().startswith("{"):
+            for rnd in result.get("rounds", []):
+                for prop in rnd.get("proposals", []):
+                    c = prop.get("content", "") or ""
+                    if c and len(c.strip()) >= 5 and not c.strip().startswith("{"):
+                        final_answer = c
+                        result["judge"]["final_answer"] = c
+                        result["judge"]["source"] = "proposal_ultimate_fallback"
+                        break
+                if final_answer and len(final_answer.strip()) >= 5 and not final_answer.strip().startswith("{"):
+                    break
 
         if context and final_answer:
             corrected = _apply_kb_correction(req.prompt, final_answer, context)
@@ -340,6 +367,7 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
         result["raw_llm_response"] = first_proposal
         result["evaluation"]["raw_llm_response"] = first_proposal
 
+        print(f"[MultiAgent DEBUG] job={job_id} FINAL stored final_answer={repr(final_answer[:200])}")
         _jobs[job_id] = {"status": "done", "result": result}
 
     except Exception as e:
