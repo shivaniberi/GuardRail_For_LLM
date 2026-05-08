@@ -1322,17 +1322,27 @@ class GuardrailSystem:
                 block_key = "privacy" if prompt_block_category == "privacy_pii" else prompt_block_category
                 block_msg = BLOCK_MESSAGES.get(block_key, "This request has been blocked.")
                 prompt_flags = {k: not v["passed"] for k, v in prompt_check.get("checks", {}).items()}
+                # Always get ML probability even when rule-based already blocked
+                ml_prob = prompt_check.get("unsafe_probability")
+                if ml_prob is None and self.input_guardrail is not None:
+                    try:
+                        ml_prob = self.input_guardrail.predict_proba_unsafe(prompt)
+                    except Exception:
+                        ml_prob = None
                 result["verdict"]          = "blocked"
                 result["block_reason"]     = prompt_block_category
                 result["raw_llm_response"] = f"[Blocked at input — {prompt_block_category} detected in prompt]"
                 result["final_response"]   = block_msg
                 result["response"]         = block_msg
                 result["safety_flags"]     = prompt_flags
+                result["metadata"]["ml_unsafe_probability"]   = ml_prob
+                result["metadata"]["ml_prompt_probability"]   = ml_prob
+                result["metadata"]["ml_response_probability"] = None
                 result["guardrails"] = {
                     "input": {
                         "rule_based": {"valid": False, "block_category": prompt_block_category,
                                        "checks": prompt_check.get("checks", {})},
-                        "ml_based":   {"valid": True, "unsafe_probability": None},
+                        "ml_based":   {"valid": False, "unsafe_probability": ml_prob},
                     },
                     "output": {"valid": True, "checks": {}},
                 }
