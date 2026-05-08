@@ -172,6 +172,17 @@ def _run_guardrail(req: PromptRequest):
         result["response"] = human_correction
         result["guarded_response"] = human_correction
 
+    # Extract metadata fields from result
+    meta             = result.get("metadata", {}) or {}
+    ml_unsafe_prob   = meta.get("ml_unsafe_probability")
+    ml_prompt_prob   = meta.get("ml_prompt_probability")
+    ml_response_prob = meta.get("ml_response_probability")
+    ml_classifier    = meta.get("classifier")
+    lg_category      = meta.get("llamaguard_category")
+
+    out_checks       = result.get("guardrails", {}).get("output", {}).get("checks", {}) or {}
+    hallucination_sim = out_checks.get("hallucination_similarity")
+
     return {
         "raw_llm_response": result.get("raw_llm_response", ""),
         "final_response":   result.get("final_response", ""),
@@ -180,10 +191,10 @@ def _run_guardrail(req: PromptRequest):
         "verdict":          result.get("verdict", "unknown"),
         "block_reason":     result.get("block_reason"),
         "metadata": {
-            "rag_used":                result.get("metadata", {}).get("rag_used"),
-            "retrieved_docs_total":    result.get("metadata", {}).get("retrieved_docs_total"),
-            "kb_sources":              result.get("metadata", {}).get("kb_sources"),
-            "ml_unsafe_probability":   result.get("metadata", {}).get("ml_unsafe_probability"),
+            "rag_used":                meta.get("rag_used"),
+            "retrieved_docs_total":    meta.get("retrieved_docs_total"),
+            "kb_sources":              meta.get("kb_sources"),
+            "ml_unsafe_probability":   ml_unsafe_prob,
             "ml_prompt_probability":   ml_prompt_prob,
             "ml_response_probability": ml_response_prob,
             "classifier":              ml_classifier,
@@ -213,9 +224,9 @@ def _run_guardrail(req: PromptRequest):
             "valid": not result.get("factual_flags", {}).get("hallucination_detected", False),
         },
         "rag_metadata": {
-            "rag_used":   result.get("metadata", {}).get("rag_used"),
-            "total_docs": result.get("metadata", {}).get("retrieved_docs_total"),
-            "kb_sources": result.get("metadata", {}).get("kb_sources"),
+            "rag_used":   meta.get("rag_used"),
+            "total_docs": meta.get("retrieved_docs_total"),
+            "kb_sources": meta.get("kb_sources"),
         },
         "safety_flags":  _merge_prompt_flags(req.prompt, result.get("safety_flags", {})),
         "factual_flags": result.get("factual_flags", {}),
