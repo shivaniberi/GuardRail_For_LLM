@@ -131,7 +131,6 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
   const mlPrompt   = meta?.ml_prompt_probability ?? null;
   const mlResponse = meta?.ml_response_probability ?? null;
   const classifier = meta?.classifier ?? null;
-  const lgCategory = meta?.llamaguard_category ?? null;
 
   // Hallucination: check both top-level and nested checks field
   const hallSim = out?.hallucination_similarity ?? out?.checks?.hallucination_similarity ?? null;
@@ -208,8 +207,8 @@ function GuardrailAnalysis({ result, theme }: { result: any; theme: 'dark' | 'li
             <div className={`mt-2 text-xs space-y-0.5 ${cardText}`}>
               {mlPrompt   != null && <p>Prompt score: <span className="font-semibold">{`${(mlPrompt * 100).toFixed(4)}%`}</span></p>}
               {mlResponse != null && <p>Response score: <span className="font-semibold">{`${(mlResponse * 100).toFixed(4)}%`}</span></p>}
-              {classifier === 'llamaguard'
-                ? <p className="text-yellow-400 font-semibold">⚡ Escalated to LlamaGuard 3{lgCategory ? ` — ${lgCategory}` : ''}</p>
+              {classifier === 'llm_judge'
+                ? <p className="text-yellow-400 font-semibold">⚡ Escalated to LLM Intent Judge</p>
                 : classifier === 'ml'
                 ? <p className={cardTitle}>Classifier: ML model</p>
                 : null}
