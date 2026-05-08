@@ -264,8 +264,18 @@ def _is_clean_answer(text: str) -> bool:
     return True
 
 
+_REFUSAL_PHRASES = (
+    "i cannot", "i can't", "i'm unable", "i am unable",
+    "not able to", "cannot provide", "i won't", "i will not",
+    "harmful stereotype", "perpetuates", "inappropriate",
+)
+
 def _apply_kb_correction(question: str, answer: str, context: str) -> str:
     if not context or not answer:
+        return answer
+    # Never replace a refusal answer with KB content
+    answer_lower = answer.lower()
+    if any(phrase in answer_lower for phrase in _REFUSAL_PHRASES):
         return answer
     try:
         from core.guardrail_implementation import (
@@ -280,7 +290,7 @@ def _apply_kb_correction(question: str, answer: str, context: str) -> str:
                 return negation
 
         if callable(_kb_contradicts_response):
-            contradicts, suggested = _kb_contradicts_response(answer, context)
+            contradicts, suggested = _kb_contradicts_response(answer, context, question)
             if contradicts and suggested and callable(_extract_kb_answer_sentence):
                 kb_sentence = _extract_kb_answer_sentence(question, context, suggested)
                 if kb_sentence and callable(_kb_sentence_matches_query_topic):
