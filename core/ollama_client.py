@@ -13,8 +13,16 @@ This module is used by the GuardrailSystem to:
 """
 
 import os
+import re
 import requests
 import time
+
+
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> chain-of-thought blocks from Qwen3/DeepSeek responses."""
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+    text = re.sub(r'<think>.*', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+    return text
 
 OLLAMA_HOST = "http://localhost:11434"
 
@@ -70,7 +78,7 @@ def _groq_generate(prompt: str, system: str, groq_model: str, max_tokens: int) -
         try:
             resp = requests.post(url, json=payload, headers=headers, timeout=30)
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            return _strip_think_tags(resp.json()["choices"][0]["message"]["content"].strip())
         except Exception as e:
             print(f"[Groq Retry {attempt+1}/3] Error: {e}")
             if attempt < 2:
@@ -99,7 +107,7 @@ def _hf_generate(prompt: str, system: str, hf_model: str, max_tokens: int) -> st
                 max_tokens=max_tokens,
                 temperature=0.1,
             )
-            return completion.choices[0].message.content.strip()
+            return _strip_think_tags(completion.choices[0].message.content.strip())
         except Exception as e:
             print(f"[HF Retry {attempt+1}/3] Error: {e}")
             if attempt < 2:
@@ -158,7 +166,7 @@ def ollama_generate(
         try:
             response = requests.post(url, json=payload, timeout=600)
             response.raise_for_status()
-            return response.json()["message"]["content"].strip()
+            return _strip_think_tags(response.json()["message"]["content"].strip())
         except Exception as e:
             last_error = e
             print(f"[Ollama Retry {attempt + 1}/3] Error: {e}")

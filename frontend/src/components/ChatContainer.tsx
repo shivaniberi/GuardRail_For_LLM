@@ -21,6 +21,13 @@ function stripMarkdown(text: string): string {
 function cleanResponse(text: string): string {
   if (!text || text === '—') return text;
 
+  // Strip <think>...</think> blocks (Qwen3/DeepSeek chain-of-thought)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // If the tag was never closed, strip everything from <think> onward
+  text = text.replace(/<think>[\s\S]*/gi, '').trim();
+
+  if (!text) return '—';
+
   // Cut off at chain-of-thought markers
   const cutMarkers = [
   'Chain-of-thought:',
