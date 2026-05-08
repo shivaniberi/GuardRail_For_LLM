@@ -316,13 +316,6 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
                 if final_answer and len(final_answer.strip()) >= 5 and not final_answer.strip().startswith("{"):
                     break
 
-        if context and final_answer:
-            corrected = _apply_kb_correction(req.prompt, final_answer, context)
-            if corrected != final_answer:
-                result["judge"]["final_answer"] = corrected
-                result["judge"]["kb_corrected"] = True
-                final_answer = corrected
-
         primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
         wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
         kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
@@ -480,15 +473,7 @@ async def api_multi_agent_sync(req: MultiAgentRequest):
                 result["judge"]["final_answer"] = fallback
                 result["judge"]["source"] = "proposal_fallback"
 
-        # 4. Apply KB correction to fix hallucinations
-        if context and final_answer:
-            corrected = _apply_kb_correction(req.prompt, final_answer, context)
-            if corrected != final_answer:
-                result["judge"]["final_answer"] = corrected
-                result["judge"]["kb_corrected"] = True
-                final_answer = corrected
-
-        # 5. Build RAG metadata
+        # 4. Build RAG metadata
         primary_count = int((ctx_meta or {}).get("primary_count", 0) or 0)
         wiki_count    = int((ctx_meta or {}).get("wiki_count", 0) or 0)
         kb_sources    = [s for s, n in [("primary", primary_count), ("wiki", wiki_count)] if n > 0]
