@@ -183,7 +183,7 @@ def _run_guardrail(req: PromptRequest):
             "rag_used":                result.get("metadata", {}).get("rag_used"),
             "retrieved_docs_total":    result.get("metadata", {}).get("retrieved_docs_total"),
             "kb_sources":              result.get("metadata", {}).get("kb_sources"),
-            "ml_unsafe_probability":   ml_unsafe_prob,
+            "ml_unsafe_probability":   result.get("metadata", {}).get("ml_unsafe_probability"),
             "ml_prompt_probability":   ml_prompt_prob,
             "ml_response_probability": ml_response_prob,
             "classifier":              ml_classifier,
