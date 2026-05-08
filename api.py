@@ -310,8 +310,8 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
         try:
             rag = _system.rag_retriever
             if rag:
-                docs = rag.retrieve(req.prompt, top_k=3)
-                context = " ".join([d.get("text", "") for d in docs]) if docs else ""
+                docs = rag.retrieve(req.prompt, k=3)
+                context = " ".join([d if isinstance(d, str) else d.get("text", "") for d in docs]) if docs else ""
                 ctx_meta = {"primary_count": len(docs), "wiki_count": 0}
         except Exception:
             pass

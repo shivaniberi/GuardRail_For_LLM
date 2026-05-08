@@ -48,19 +48,14 @@ function cleanResponse(text: string): string {
   }
   let cleaned = text.slice(0, cutAt).trim();
 
-  // Remove inline KB context references sentence by sentence
+  // Remove KB internal citation markers injected by the backend
+  // Only remove patterns that are unambiguously system-generated metadata,
+  // never patterns that could appear in real user-facing content
   const removePatterns = [
-    /This can be confirmed from[^.!?]*[.!?]/gi,
-    /This is confirmed (by|from|in)[^.!?]*[.!?]/gi,
-    /According to the (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information)[^.!?]*[.!?]/gi,
-    /The (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information)[^.!?]*(states?|confirms?|says?|mentions?)[^.!?]*[.!?]/gi,
-    /This (directly |clearly )?(answers?|confirms?|establishes?)[^.!?]*(question|context|information)[^.!?]*[.!?]/gi,
-    /Based on the (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information|historical context)[^.!?]*[.!?]/gi,
-    /from the (provided |given )?(context|PRIMARY_KB|WIKIPEDIA_KB|text|information)[^.!?]*[.!?]/gi,
-    /as (stated|mentioned|confirmed|established) in[^.!?]*[.!?]/gi,
-    /explicitly states?:[^.!?]*[.!?]/gi,
     /\(PRIMARY_KB[^)]*\)/gi,
     /\(WIKIPEDIA_KB[^)]*\)/gi,
+    /### PRIMARY_KB\b[^\n]*/gi,
+    /### WIKIPEDIA_KB\b[^\n]*/gi,
   ];
 
   for (const pattern of removePatterns) {

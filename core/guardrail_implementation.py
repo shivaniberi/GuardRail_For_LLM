@@ -697,7 +697,7 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
     if not context or not response:
         return False, ""
 
-    response_lower = context.lower()
+    response_lower = response.lower()
     response_entities = set(e.lower() for e in _extract_named_entities(response))
     if not response_entities:
         return False, ""
@@ -1491,19 +1491,8 @@ class GuardrailSystem:
                         if is_refusal:
                             factual_flags["factual_verdict"] = "llm_refusal_trusted"
                         else:
-                            raw_word_count = len(raw_response.split())
-                            if raw_word_count < 6:
-                                factual_flags["factual_verdict"] = "raw_llm_short_trusted"
-                            else:
-                                kb_sentence = _extract_kb_answer_sentence(prompt, context, "")
-                                kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
-                                    prompt, kb_sentence, ""
-                                )
-                                if kb_on_topic:
-                                    result["final_response"] = kb_sentence
-                                    factual_flags["factual_verdict"] = "kb_filled_gap"
-                                else:
-                                    factual_flags["factual_verdict"] = "raw_llm_unverified"
+                            # No contradiction, no entity mismatch — trust the LLM response
+                            factual_flags["factual_verdict"] = "raw_llm_trusted"
             else:
                 factual_flags["factual_verdict"] = (
                     "kb_irrelevant" if skip_reason == "context_irrelevant" else "no_kb"
