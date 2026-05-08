@@ -727,11 +727,12 @@ def _kb_contradicts_response(response: str, context: Optional[str]) -> Tuple[boo
                 if not re.fullmatch(role_keywords, g.lower()):
                     kb_role_entities.add(g.lower())
 
+    print(f"[ContradictDebug] response_entities={response_entities} kb_role_entities={kb_role_entities}")
+    print(f"[ContradictDebug] context_snippet={context[:400]!r}")
+
     # Check if KB has a role-entity that is NOT mentioned in the response
     for kb_entity in kb_role_entities:
         if kb_entity not in response_entities:
-            # KB names a different person for a role → contradiction
-            # Return the KB entity (title-cased) as the suggested correct answer
             return True, kb_entity.title()
 
     return False, ""
