@@ -359,6 +359,18 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
                 if final_answer and len(final_answer.strip()) >= 5 and not final_answer.strip().startswith("{"):
                     break
 
+        # Check FACTUAL_NEGATION_KB — always overrides LLM regardless of KB relevance
+        try:
+            from core.guardrail_implementation import _lookup_factual_negation
+            negation = _lookup_factual_negation(req.prompt)
+            if negation:
+                final_answer = negation
+                result["judge"]["final_answer"] = negation
+                result["judge"]["source"] = "factual_negation_kb"
+                print(f"[MultiAgent] FACTUAL_NEGATION_KB override: {negation[:80]!r}")
+        except Exception:
+            pass
+
         # ML guardrail on the final answer
         ml_unsafe_prob = None
         if final_answer and _system is not None:
