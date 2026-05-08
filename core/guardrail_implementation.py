@@ -1401,17 +1401,18 @@ class GuardrailSystem:
                     factual_flags["kb_contradicts"]    = kb_contradicts
                     factual_flags["kb_suggested"]      = kb_suggested
                     factual_flags["raw_entity_in_kb"]  = raw_entity_in_kb
+                    print(f"[GuardrailDebug] kb_contradicts={kb_contradicts} kb_suggested={kb_suggested!r} raw_entities={raw_entities} raw_entity_in_kb={raw_entity_in_kb} out_check_valid={out_check['valid']}")
 
                     if out_check["valid"] and not kb_contradicts:
-                        # Cosine sim passes + no contradiction → KB verifies raw response
                         factual_flags["factual_verdict"] = "kb_verified"
+                        print(f"[GuardrailDebug] verdict=kb_verified → keeping raw LLM")
 
                     elif kb_contradicts:
-                        # KB names a DIFFERENT entity than the LLM did.
                         kb_sentence = _extract_kb_answer_sentence(prompt, context, kb_suggested)
                         kb_on_topic = kb_sentence and _kb_sentence_matches_query_topic(
                             prompt, kb_sentence, context
                         )
+                        print(f"[GuardrailDebug] verdict=kb_contradicts kb_sentence={kb_sentence!r:.120} kb_on_topic={kb_on_topic}")
                         if kb_on_topic:
                             result["final_response"] = kb_sentence
                             factual_flags["factual_verdict"] = "kb_corrected"
