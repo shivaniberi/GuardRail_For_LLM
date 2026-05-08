@@ -316,7 +316,9 @@ def _run_debate_job(job_id: str, req: MultiAgentRequest):
         except Exception:
             pass
 
-        judge = result.get("judge", {}) or {}
+        if not result.get("judge"):
+            result["judge"] = {}
+        judge = result["judge"]
         final_answer = judge.get("final_answer", "") or ""
         print(f"[MultiAgent DEBUG] job={job_id} judge.final_answer={repr(final_answer[:200])}")
         print(f"[MultiAgent DEBUG] job={job_id} judge.raw={repr((judge.get('raw','') or '')[:200])}")
