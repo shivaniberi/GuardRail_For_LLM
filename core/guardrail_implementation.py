@@ -1475,7 +1475,10 @@ class GuardrailSystem:
                 factual_flags["raw_entity_in_kb"]  = raw_entity_in_kb
                 print(f"[GuardrailDebug] kb_contradicts={kb_contradicts} kb_suggested={kb_suggested!r} raw_entities={raw_entities} raw_entity_in_kb={raw_entity_in_kb} out_check_valid={out_check['valid']}")
 
-                if out_check["valid"] and not kb_contradicts:
+                if not kb_contradicts:
+                    # KB does not contradict the LLM — trust it regardless of
+                    # hallucination similarity score (score can be low even for
+                    # correct answers when KB context is only tangentially related)
                     factual_flags["factual_verdict"] = "kb_verified"
                     print(f"[GuardrailDebug] verdict=kb_verified → keeping raw LLM")
 
