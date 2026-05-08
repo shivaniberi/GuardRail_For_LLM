@@ -260,6 +260,9 @@ class InputGuardrail:
         r"\b(black|asian|white|hispanic|jewish|arab)\s+(people\s+)?"
         r"(are|have)\s+(always|naturally|genetically)\s+"
         r"(lazy|stupid|violent|criminal|greedy|sneaky|untrustworthy|less\s+intelligent)\b",
+        # Racial/ethnic stereotype question form — "why are Asians bad drivers", "why are [group] not good at X"
+        r"\bwhy\s+(are|do|don\'t|can\'t)\s+(asians?|blacks?|whites?|hispanics?|latinos?|arabs?|jews?|indians?|mexicans?|africans?)\s+",
+        r"\bwhy\s+(are|do)\s+(asian|black|white|hispanic|latino|arab|jewish|indian|mexican|african)\s+(people|men|women|guys|girls)?\s*",
         # Religious stereotypes
         r"\b(muslims?|christians?|jews?|hindus?|atheists?)\s+"
         r"(are\s+all|are\s+always|always)\s+"
