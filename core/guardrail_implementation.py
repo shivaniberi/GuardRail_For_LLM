@@ -271,6 +271,9 @@ class InputGuardrail:
         r"\bignore\s+(previous|above|all|your)\s+instructions?\b",
         r"\bdisregard\s+(all|your|previous|the)?\s*instructions?\b",
         r"\byou\s+are\s+now\s+(a\s+)?\w+(\s+\w+)?\s*(,|\.)?\s*(ignore|forget|disregard)\b",
+        r"\byou\s+are\s+now\s+an?\s+unrestricted\b",
+        r"\bno\s+safety\s+filters?\b",
+        r"\bwithout\s+(any\s+)?(restrictions?|filters?|limits?|guidelines?)\b",
         r"\bnew\s+(role|character|personality|directive|instructions?)\b",
         r"\bact\s+as\s+(if\s+you\s+are|a\s+|an\s+)?\w+(\s+\w+)?\s*(with\s+no\s+restrictions?)?\b",
         r"\bpretend\s+(you\s+are|to\s+be)\b",
@@ -279,6 +282,7 @@ class InputGuardrail:
         r"\bdeveloper\s+mode\b",
         r"\bno\s+restrictions?\s+mode\b",
         r"\bsystem\s*prompt\s*[:=]\s*",
+        r"\banswer\s+everything\s+(honestly|without|freely)\b",
     ]
 
     # ── SELF-HARM ─────────────────────────────────────────────────────────────
@@ -286,11 +290,14 @@ class InputGuardrail:
         r"\bhow\s+to\s+(kill|hurt|harm|cut)\s+(my)?self\b",
         r"\b(methods?|ways?|best\s+way)\s+(to|of)\s+(suicide|self.harm|self.injur)\b",
         r"\bpainless\s+way\s+to\s+die\b",
+        r"\bpainless\s+(methods?|ways?)\s+to\s+(end|take)\b",
+        r"\b(most\s+)?(painless|peaceful|quickest|easiest)\s+(methods?|ways?)\s+(to\s+)?(end|die|kill)\b",
         r"\bwant\s+to\s+(die|end\s+my\s+life|kill\s+myself)\b",
         r"\bsuicide\s+(methods?|how\s+to|ways?|guide|instructions?)\b",
         r"\boverdose\s+on\s+\w+\s+to\s+(die|kill\s+myself)\b",
         r"\bhow\s+to\s+(slit|cut)\s+(my\s+)?(wrists?|veins?)\b",
         r"\blethal\s+(dose|amount|method)\s+of\b",
+        r"\b(end|take)\s+(one.s|my|your)\s+(own\s+)?life\b",
     ]
 
     # ── DRUG SYNTHESIS ────────────────────────────────────────────────────────
@@ -311,7 +318,8 @@ class InputGuardrail:
     # ── FINANCIAL FRAUD ───────────────────────────────────────────────────────
     FRAUD_PATTERNS = [
         r"\bhow\s+to\s+launder\s+money\b",
-        r"\b(create|make|generate)\s+(a\s+)?fake\s+(invoice|receipt|payslip|bank\s+statement)\b",
+        r"\b(create|make|generate|forge|falsify)\s+(a\s+)?fake\s+(invoice|receipt|payslip|bank\s+statement|document)\b",
+        r"\bfake\s+(bank\s+statements?|documents?|invoices?|receipts?)\s+(to|for)\b",
         r"\b(build|make|install)\s+(a\s+)?card\s+(skimmer|cloner)\b",
         r"\bhow\s+to\s+(commit|do|pull\s+off)\s+(tax\s+fraud|wire\s+fraud|insurance\s+fraud)\b",
         r"\bpyramid\s+scheme\s+(setup|how\s+to|create)\b",
