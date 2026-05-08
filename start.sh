@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-echo ">>> Downloading latest artifacts from S3..."
-aws s3 cp s3://$S3_BUCKET/embeddings/ ./core/ --recursive 2>/dev/null || echo "S3 embeddings not found, skipping..."
+echo ">>> Downloading latest artifacts from S3 (bucket: $S3_BUCKET)..."
+aws s3 cp s3://$S3_BUCKET/embeddings/ ./core/ --recursive || echo "S3 embeddings not found, skipping..."
 aws s3 cp s3://$S3_BUCKET/models/ ./core/ --recursive 2>/dev/null || echo "S3 models not found, skipping..."
 
 echo ">>> Starting GuardRail FastAPI server..."
