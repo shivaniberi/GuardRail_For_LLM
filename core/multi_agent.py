@@ -270,9 +270,10 @@ class ChainOfDebateOrchestrator:
             pass
 
         # STEP 6 — Output guardrail verification
+        final_ans = parsed_judge.get("final_answer", parsed_judge.get("raw", "")) or ""
         output_verification = self.gs.output_guardrail.verify(
             query=question,
-            response=parsed_judge.get("final_answer", parsed_judge.get("raw", "")),
+            response=str(final_ans),
             context=context,
         )
 
