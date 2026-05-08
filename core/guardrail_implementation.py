@@ -1269,49 +1269,6 @@ class GuardrailSystem:
             "I recommend doing an internet search for the most accurate and up-to-date answer."
         )
 
-        # ── STEP 0: Check PROMPT for unsafe patterns (block before calling LLM) ──
-        if self.config.enable_input_validation:
-            ig_prompt = self.input_guardrail
-            prompt_flags: Dict[str, bool] = {
-                "hate":             ig_prompt.detect_hate(prompt),
-                "bias":             ig_prompt.detect_bias(prompt),
-                "violence_illegal": ig_prompt.detect_violence_or_illegal(prompt),
-                "self_harm":        ig_prompt.detect_self_harm(prompt),
-                "drug_synthesis":   ig_prompt.detect_drug_synthesis(prompt),
-                "financial_fraud":  ig_prompt.detect_financial_fraud(prompt),
-                "misinformation":   ig_prompt.detect_misinformation(prompt),
-                "prompt_injection": ig_prompt.detect_injection(prompt),
-            }
-            PROMPT_PRIORITY = [
-                "self_harm", "violence_illegal", "drug_synthesis",
-                "financial_fraud", "hate", "bias", "misinformation", "prompt_injection",
-            ]
-            triggered_prompt_category = next(
-                (cat for cat in PROMPT_PRIORITY if prompt_flags.get(cat)), None
-            )
-            if triggered_prompt_category:
-                block_key = triggered_prompt_category
-                block_msg = BLOCK_MESSAGES.get(block_key, "This request has been blocked.")
-                result["verdict"]        = "blocked"
-                result["block_reason"]   = triggered_prompt_category
-                result["raw_llm_response"] = "[Blocked at input — LLM was not called]"
-                result["final_response"] = block_msg
-                result["response"]       = block_msg
-                result["safety_flags"]   = prompt_flags
-                result["guardrails"] = {
-                    "input": {
-                        "rule_based": {
-                            "valid":          False,
-                            "block_category": triggered_prompt_category,
-                            "checks":         {k: {"passed": not v} for k, v in prompt_flags.items()},
-                        },
-                        "ml_based": {"valid": True, "unsafe_probability": None},
-                    },
-                    "output": {"valid": True, "checks": {}},
-                }
-                self._log(result)
-                return result
-
         # ── STEP 1: Always get raw LLM response ───────────────────────────────
         try:
             raw_response = ollama_generate(

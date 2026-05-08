@@ -666,15 +666,9 @@ export function ChatContainer() {
         });
         if (!resp.ok) { const t = await resp.text().catch(() => resp.statusText); throw new Error(`Server ${resp.status}: ${t}`); }
         data = await resp.json();
-        const responseText =
-          data.response ||
-          data.final_response ||
-          (data.verdict === 'blocked'
-            ? `⚠️ Blocked: ${data.block_reason || 'unsafe content'}`
-            : '[No response]');
         setConversations(prev => prev.map(c =>
           c.id === currentId
-            ? { ...c, messages: [...c.messages, { role: 'assistant', text: responseText, result: data, mode: 'single', prompt: sentPrompt }] }
+            ? { ...c, messages: [...c.messages, { role: 'assistant', text: data.response || data.final_response || '', result: data, mode: 'single', prompt: sentPrompt }] }
             : c
         ));
       }
