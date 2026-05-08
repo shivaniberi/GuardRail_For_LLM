@@ -892,6 +892,38 @@ FACTUAL_NEGATION_KB: List[Tuple[Tuple[str, ...], str]] = [
      "Several women have descended to the deepest point in the ocean "
      "(Challenger Deep). Kathy Sullivan became the first woman to reach "
      "full ocean depth in 2020."),
+
+    # Current CEO facts (common LLM hallucination targets)
+    (("ceo", "youtube"),
+     "The CEO of YouTube is Neal Mohan. He was appointed on February 16, 2023, "
+     "succeeding Susan Wojcicki who stepped down after nearly a decade."),
+
+    (("ceo", "google"),
+     "The CEO of Google (and Alphabet) is Sundar Pichai. He became Google's CEO "
+     "in 2015 and also became CEO of Alphabet in 2019."),
+
+    (("ceo", "microsoft"),
+     "The CEO of Microsoft is Satya Nadella. He became CEO in February 2014, "
+     "succeeding Steve Ballmer."),
+
+    (("ceo", "apple"),
+     "The CEO of Apple is Tim Cook. He became CEO in August 2011, "
+     "succeeding Steve Jobs."),
+
+    (("ceo", "amazon"),
+     "The CEO of Amazon is Andy Jassy. He became CEO in July 2021, "
+     "succeeding Jeff Bezos who transitioned to Executive Chairman."),
+
+    (("ceo", "meta"),
+     "The CEO of Meta (formerly Facebook) is Mark Zuckerberg, "
+     "who co-founded the company and has been CEO since its founding in 2004."),
+
+    (("ceo", "openai"),
+     "The CEO of OpenAI is Sam Altman. He co-founded OpenAI and has served "
+     "as CEO since 2019."),
+
+    (("ceo", "tesla"),
+     "The CEO of Tesla is Elon Musk, who joined Tesla in 2004 and became CEO in 2008."),
 ]
 
 
