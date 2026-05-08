@@ -1269,6 +1269,27 @@ class GuardrailSystem:
             "I recommend doing an internet search for the most accurate and up-to-date answer."
         )
 
+        # ── STEP 0: Block prompt injection attacks before calling LLM ────────
+        # Injection check must run on the PROMPT (not response) — the LLM's
+        # response to a jailbreak won't contain the injection keywords itself.
+        if self.config.enable_input_validation and self.input_guardrail.detect_injection(prompt):
+            result["verdict"]          = "blocked"
+            result["block_reason"]     = "prompt_injection"
+            result["raw_llm_response"] = "[Blocked at input — prompt injection detected]"
+            result["final_response"]   = BLOCK_MESSAGES["prompt_injection"]
+            result["response"]         = BLOCK_MESSAGES["prompt_injection"]
+            result["safety_flags"]     = {"prompt_injection": True}
+            result["guardrails"] = {
+                "input": {
+                    "rule_based": {"valid": False, "block_category": "prompt_injection",
+                                   "checks": {"prompt_injection": {"passed": False}}},
+                    "ml_based":   {"valid": True, "unsafe_probability": None},
+                },
+                "output": {"valid": True, "checks": {}},
+            }
+            self._log(result)
+            return result
+
         # ── STEP 1: Always get raw LLM response ───────────────────────────────
         try:
             raw_response = ollama_generate(

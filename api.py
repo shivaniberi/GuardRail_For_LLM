@@ -116,6 +116,22 @@ class FeedbackRequest(BaseModel):
 
 # ── Single-model guardrail ────────────────────────────────────────────────────
 
+def _merge_prompt_flags(prompt: str, response_flags: dict) -> dict:
+    """Merge prompt-level safety flags into the response-level flags.
+    Prompt injection must be checked on the prompt itself, not the LLM response."""
+    if _system is None:
+        return response_flags
+    merged = dict(response_flags)
+    ig = _system.input_guardrail
+    if ig.detect_injection(prompt):
+        merged["prompt_injection"] = True
+    if ig.detect_hate(prompt):
+        merged["hate"] = True
+    if ig.detect_self_harm(prompt):
+        merged["self_harm"] = True
+    return merged
+
+
 def _run_guardrail(req: PromptRequest):
     if _system is None:
         raise HTTPException(status_code=503, detail="Guardrail system not ready")
@@ -225,7 +241,7 @@ def _run_guardrail(req: PromptRequest):
             "total_docs": result.get("metadata", {}).get("retrieved_docs_total"),
             "kb_sources": result.get("metadata", {}).get("kb_sources"),
         },
-        "safety_flags":  result.get("safety_flags", {}),
+        "safety_flags":  _merge_prompt_flags(req.prompt, result.get("safety_flags", {})),
         "factual_flags": result.get("factual_flags", {}),
     }
 
