@@ -165,9 +165,10 @@ def _run_guardrail(req: PromptRequest):
         except Exception:
             ml_prompt_prob = None
 
-    # ML score for response
+    # ML score for response (skip on blocked — block message is safe text)
     ml_response_prob = None
-    if final_text:
+    is_blocked = result.get("verdict") == "blocked"
+    if final_text and not is_blocked:
         try:
             ml_out = _system.ml_input_guardrail.validate(final_text)
             ml_response_prob = ml_out.get("unsafe_probability")
